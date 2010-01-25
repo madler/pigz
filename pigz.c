@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007 Mark Adler
- * Version 1.6  30 March 2007  Mark Adler
+ * Version 1.7  29 April 2007  Mark Adler
  */
 
 /*
@@ -60,14 +60,22 @@
                        Only generate and show trace log if DEBUG defined
                        Take "-" argument to mean read file from stdin
    1.6    30 Mar 2007  Add zlib stream compression (--zlib), and decompression
+   1.7    29 Apr 2007  Decompress first entry of a zip file (if deflated)
+                       Avoid empty deflate blocks at end of deflate stream
+                       Show zlib check value (Adler-32) when listing
+                       Don't complain when decompressing empty file
+                       Warn about trailing junk for gzip and zlib streams
+                       Make listings consistent, ignore gzip extra flags
+                       Add zip stream compression (--zip)
  */
 
-#define VERSION "pigz 1.6\n"
+#define VERSION "pigz 1.7\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min block size]
     - rewrite parallelism to draw on reuseable threads from a thread pool
     - make portable for Windows, VMS, etc. (see gzip source code)
+    - write a configure and Makefile to portably compile with pthread library
  */
 
 /*
@@ -77,37 +85,51 @@
    separately.  The compressed chunks are written in order to the output, and
    the overall CRC is calculated from the CRC's of the chunks.
 
-   The compressed data format generated is the gzip format using the deflate
-   compression method.  First a gzip header is written, followed by raw deflate
-   partial streams.  They are partial, in that they do not have a terminating
-   block.  At the end, the deflate stream is terminated with a final empty
-   static block, and lastly a gzip trailer is written with the CRC and the
-   number of input bytes.
+   The compressed data format generated is in the gzip or zlib format using the
+   deflate compression method.  The input (uncompressed) data is broken up into
+   blocks, where each block is compressed independently in its own thread.  The
+   compression produces partial raw deflate streams which are concatenated by
+   a single write thread and wrapped with the gzip or zlib header and trailer.
 
-   Each raw deflate partial stream is terminated by an empty stored block
-   (using the Z_SYNC_FLUSH option of zlib), in order to end that partial
-   bit stream at a byte boundary.  That allows the partial streams to be
-   concantenated simply as sequences of bytes.  This adds a very small four
-   or five byte overhead to the output for each input chunk.
+   Each partial raw deflate stream is terminated by an empty stored block
+   (using the Z_SYNC_FLUSH option of zlib), in order to end that partial bit
+   stream at a byte boundary.  That allows the partial streams to be
+   concantenated simply as sequences of bytes.  This adds a very small four or
+   five byte overhead to the output for each input chunk.
 
-   pigz requires zlib 1.2.1 or later to allow setting the dictionary when
-   doing raw deflate.  pigz will compile and run with earlier versions of
-   zlib, but this will effectively force the --independent option, somewhat
-   degrading compression.
+   The default input block size is 128K, and can be changed with the -b option.
+   The number of compress threads is limited by default to 32, where that can
+   be changed with the -p option.  Specifiying -p 1 avoids the use of threads
+   entirely.
+
+   The input blocks, while compressed independently, do have the last 32K of
+   the previous block loaded as a preset dictionary to preserve the compression
+   effectiveness of deflating in a single thread.  This can be turned off using
+   the --independent option, so that the blocks can be decompressed
+   independently for partial error recovery or for random access.
+
+   pigz requires zlib 1.2.1 or later to allow setting the dictionary when doing
+   raw deflate.  pigz will compile and run with earlier versions of zlib, but
+   this will effectively force the --independent option, somewhat degrading
+   compression.
 
    pigz uses the POSIX pthread library for thread control and communication.
    It can be compiled with NOTHREAD #defined to not use threads at all (in
    which case pigz will not be able to live up to its name).
+
+   Inflation cannot be parallelized, at least not without specially prepared
+   deflate streams for that purpose.  For decompression, pigz only runs one
+   other thread for the check (CRC-32 or Adler-32) calculation, for a modest
+   improvement in speed.
  */
 
 /* add a dash of portability */
-#define _GNU_SOURCE
-#define _POSIX_PTHREAD_SEMANTICS
 #ifdef __linux__
 #  define _LARGEFILE64_SOURCE
 #  define _FILE_OFFSET_BITS 64
 #endif
 #ifndef NOTHREAD
+#  define _POSIX_PTHREAD_SEMANTICS
 #  define _REENTRANT
 #endif
 
@@ -121,7 +143,7 @@
 #include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), */
                         /* strcpy(), strncpy(), strlen(), strcat() */
 #include <errno.h>      /* errno, EEXIST */
-#include <time.h>       /* ctime(), ctime_r(), time(), time_t */
+#include <time.h>       /* ctime(), ctime_r(), time(), time_t, mktime() */
 #include <signal.h>     /* signal(), SIGINT */
 #ifndef NOTHREAD
 #include <pthread.h>    /* pthread_attr_destroy(), pthread_attr_init(), */
@@ -163,7 +185,7 @@
 #  define SET_BINARY_MODE(fd)
 #endif
 
-/* release an allocated pointer, if allocated, and mark unallocated */
+/* release an allocated pointer, if allocated, and mark as unallocated */
 #define RELEASE(ptr) \
     do { \
         if ((ptr) != NULL) { \
@@ -251,7 +273,8 @@ local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
     return crc1;
 }
 
-#define BASE 65521UL    /* largest prime smaller than 65536 */
+#define BASE 65521U     /* largest prime smaller than 65536 */
+#define LOW16 0xffff    /* mask lower 16 bits */
 
 local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
                                  size_t len2)
@@ -262,11 +285,10 @@ local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
 
     /* the derivation of this formula is left as an exercise for the reader */
     rem = (unsigned)(len2 % BASE);
-    sum1 = adler1 & 0xffff;
-    sum2 = rem * sum1;
-    sum2 %= BASE;
-    sum1 += (adler2 & 0xffff) + BASE - 1;
-    sum2 += ((adler1 >> 16) & 0xffff) + ((adler2 >> 16) & 0xffff) + BASE - rem;
+    sum1 = adler1 & LOW16;
+    sum2 = (rem * sum1) % BASE;
+    sum1 += (adler2 & LOW16) + BASE - 1;
+    sum2 += ((adler1 >> 16) & LOW16) + ((adler2 >> 16) & LOW16) + BASE - rem;
     if (sum1 > BASE) sum1 -= BASE;
     if (sum1 > BASE) sum1 -= BASE;
     if (sum2 > (BASE << 1)) sum2 -= (BASE << 1);
@@ -276,7 +298,7 @@ local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
 
 #endif
 
-/* read-only globals (set by main/read thread before others started) */
+/* globals (modified by main thread only when it's the only thread) */
 local int ind;              /* input file descriptor */
 local int outd;             /* output file descriptor */
 local char in[PATH_MAX+1];  /* input file name (accommodate recursion) */
@@ -286,15 +308,16 @@ local int headis;           /* 1 to store name, 2 to store date, 3 both */
 local int pipeout;          /* write output to stdout even if file */
 local int keep;             /* true to prevent deletion of input file */
 local int force;            /* true to overwrite, compress links */
-local int zlib;             /* true to write the zlib format */
+local int form;             /* gzip = 0, zlib = 1, zip = 2 or 3 */
 local int recurse;          /* true to dive down into directory structure */
-local char *sufx;           /* suffix to use (.gz or user supplied) */
+local char *sufx;           /* suffix to use (".gz" or user supplied) */
 local char *name;           /* name for gzip header */
 local time_t mtime;         /* time stamp from input file for gzip header */
 local int list;             /* true to list files instead of compress */
 local int first = 1;        /* true if we need to print listing header */
 local int decode;           /* 0 to compress, 1 to decompress, 2 to test */
 local int level;            /* compression level */
+local int rsync;            /* true for rsync blocking */
 local int procs;            /* number of compression threads (>= 2) */
 local int dict;             /* true to initialize dictionary in each thread */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
@@ -303,16 +326,18 @@ local struct timeval start; /* starting time of day for tracing */
 local pthread_attr_t attr;  /* thread creation attributes */
 #endif
 
-/* retained gzip header data for decompression, testing, and listing */
-local time_t stamp;         /* time stamp from gzip header for output file */
-local int xfl;              /* extra flags from gzip header */
-local char *hname = NULL;   /* name from header (allocated if not NULL) */
+/* saved gzip/zip header data for decompression, testing, and listing */
+local time_t stamp;                 /* time stamp from gzip header */
+local char *hname = NULL;           /* name from header (allocated) */
+local unsigned long zip_crc;        /* local header crc */
+local unsigned long zip_clen;       /* local header compressed length */
+local unsigned long zip_ulen;       /* local header uncompressed length */
 
 /* compute check value depeding on format */
-#define CHECK(a,b,c) (zlib ? adler32(a,b,c) : crc32(a,b,c))
-#define COMB(a,b,c) (zlib ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
+#define CHECK(a,b,c) (form == 1 ? adler32(a,b,c) : crc32(a,b,c))
+#define COMB(a,b,c) (form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
 
-/* exit with error */
+/* exit with error, delete output file */
 local int bail(char *why, char *what)
 {
     if (out != NULL)
@@ -431,7 +456,7 @@ local void log_dump(void)
 #endif
 
 /* catch termination signal */
-void cutshort(int sig)
+local void cutshort(int sig)
 {
     Trace(("termination by user"));
     if (out != NULL)
@@ -634,21 +659,75 @@ local void jobs_free(void)
    to zlib functions that use unsigned int lengths */
 #define MAX ((((unsigned)-1) >> 1) + 1)
 
+/* convert Unix time to MS-DOS date and time, assuming current timezone
+   (you got a better idea?) */
+local unsigned long time2dos(time_t t)
+{
+    struct tm *tm;
+    unsigned long dos;
+
+    if (t == 0)
+        t = time(NULL);
+    tm = localtime(&t);
+    if (tm->tm_year < 80 || tm->tm_year > 207)
+        return 0;
+    dos = (tm->tm_year - 80) << 25;
+    dos += (tm->tm_mon + 1) << 21;
+    dos += tm->tm_mday << 16;
+    dos += tm->tm_hour << 11;
+    dos += tm->tm_min << 5;
+    dos += (tm->tm_sec + 1) >> 1;   /* round to double-seconds */
+    return dos;
+}
+
 /* put a 4-byte integer into a byte array in LSB order or MSB order */
-#define PUT4L(a,b) (*(a)=(b),(a)[1]=(b)>>8,(a)[2]=(b)>>16,(a)[3]=(b)>>24)
+#define PUT2L(a,b) (*(a)=(b)&0xff,(a)[1]=(b)>>8)
+#define PUT4L(a,b) (PUT2L(a,(b)&0xffff),PUT2L((a)+2,(b)>>16))
 #define PUT4M(a,b) (*(a)=(b)>>24,(a)[1]=(b)>>16,(a)[2]=(b)>>8,(a)[3]=(b))
 
-/* write a header using the information in the global descriptors */
-local void put_header(void)
+/* write a gzip, zlib, or zip header using the information in the globals */
+local unsigned long put_header(void)
 {
-    unsigned char head[10];
+    unsigned long len;
+    unsigned char head[30];
 
-    if (zlib) {
+    if (form > 1) {                 /* zip */
+        /* write local header */
+        PUT4L(head, 0x04034b50UL);  /* local header signature */
+        PUT2L(head + 4, 20);        /* version needed to extract (2.0) */
+        PUT2L(head + 6, 8);         /* flags: data descriptor follows data */
+        PUT2L(head + 8, 8);         /* deflate */
+        PUT4L(head + 10, time2dos(mtime));
+        PUT4L(head + 14, 0);        /* crc (not here) */
+        PUT4L(head + 18, 0);        /* compressed length (not here) */
+        PUT4L(head + 22, 0);        /* uncompressed length (not here) */
+        PUT2L(head + 26, name == NULL ? 1 : strlen(name));  /* name length */
+        PUT2L(head + 28, 9);        /* length of extra field (see below) */
+        writen(outd, head, 30);     /* write local header */
+        len = 30;
+
+        /* write file name (use "-" for stdin) */
+        if (name == NULL)
+            writen(outd, (unsigned char *)"-", 1);
+        else
+            writen(outd, (unsigned char *)name, strlen(name));
+        len += name == NULL ? 1 : strlen(name);
+
+        /* write extended timestamp extra field block (9 bytes) */
+        PUT2L(head, 0x5455);        /* extended timestamp signature */
+        PUT2L(head + 2, 5);         /* number of data bytes in this block */
+        head[4] = 1;                /* flag presence of mod time */
+        PUT4L(head + 5, mtime);     /* mod time */
+        writen(outd, head, 9);      /* write extra field block */
+        len += 9;
+    }
+    else if (form) {                /* zlib */
         head[0] = 0x78;             /* deflate, 32K window */
         head[1] = (level == 9 ? 3 : (level == 1 ? 0 :
             (level >= 6 || level == Z_DEFAULT_COMPRESSION ? 1 :  2))) << 6;
         head[1] += 31 - (((head[0] << 8) + head[1]) % 31);
         writen(outd, head, 2);
+        len = 2;
     }
     else {                          /* gzip */
         head[0] = 31;
@@ -659,8 +738,85 @@ local void put_header(void)
         head[8] = level == 9 ? 2 : (level == 1 ? 4 : 0);
         head[9] = 3;                /* unix */
         writen(outd, head, 10);
+        len = 10;
         if (name != NULL)
             writen(outd, (unsigned char *)name, strlen(name) + 1);
+        if (name != NULL)
+            len += strlen(name) + 1;
+    }
+    return len;
+}
+
+/* write a gzip, zlib, or zip trailer */
+local void put_trailer(unsigned long ulen, unsigned long clen,
+                       unsigned long check, unsigned long head)
+{
+    unsigned char tail[46];
+
+    if (form > 1) {                 /* zip */
+        unsigned long cent;
+
+        /* write data descriptor (as promised in local header) */
+        PUT4L(tail, check);
+        PUT4L(tail + 4, clen);
+        PUT4L(tail + 8, ulen);
+        writen(outd, tail, 12);
+
+        /* write central file header */
+        PUT4L(tail, 0x02014b50UL);  /* central header signature */
+        tail[4] = 63;               /* obeyed version 6.3 of the zip spec */
+        tail[5] = 255;              /* ignore external attributes */
+        PUT2L(tail + 6, 20);        /* version needed to extract (2.0) */
+        PUT2L(tail + 8, 8);         /* data descriptor is present */
+        PUT2L(tail + 10, 8);        /* deflate */
+        PUT4L(tail + 12, time2dos(mtime));
+        PUT4L(tail + 16, check);    /* crc */
+        PUT4L(tail + 20, clen);     /* compressed length */
+        PUT4L(tail + 24, ulen);     /* uncompressed length */
+        PUT2L(tail + 28, name == NULL ? 1 : strlen(name));  /* name length */
+        PUT2L(tail + 30, 9);        /* length of extra field (see below) */
+        PUT2L(tail + 32, 0);        /* no file comment */
+        PUT2L(tail + 34, 0);        /* disk number 0 */
+        PUT2L(tail + 36, 0);        /* internal file attributes */
+        PUT4L(tail + 38, 0);        /* external file attributes (ignored) */
+        PUT4L(tail + 42, 0);        /* offset of local header */
+        writen(outd, tail, 46);     /* write central file header */
+        cent = 46;
+
+        /* write file name (use "-" for stdin) */
+        if (name == NULL)
+            writen(outd, (unsigned char *)"-", 1);
+        else
+            writen(outd, (unsigned char *)name, strlen(name));
+        cent += name == NULL ? 1 : strlen(name);
+
+        /* write extended timestamp extra field block (9 bytes) */
+        PUT2L(tail, 0x5455);        /* extended timestamp signature */
+        PUT2L(tail + 2, 5);         /* number of data bytes in this block */
+        tail[4] = 1;                /* flag presence of mod time */
+        PUT4L(tail + 5, mtime);     /* mod time */
+        writen(outd, tail, 9);      /* write extra field block */
+        cent += 9;
+
+        /* write end of central directory record */
+        PUT4L(tail, 0x06054b50UL);  /* end of central directory signature */
+        PUT2L(tail + 4, 0);         /* number of this disk */
+        PUT2L(tail + 6, 0);         /* disk with start of central directory */
+        PUT2L(tail + 8, 1);         /* number of entries on this disk */
+        PUT2L(tail + 10, 1);        /* total number of entries */
+        PUT4L(tail + 12, cent);     /* size of central directory */
+        PUT4L(tail + 16, head + clen + 12); /* offset of central directory */
+        PUT2L(tail + 20, 0);        /* no zip file comment */
+        writen(outd, tail, 22);     /* write end of central directory record */
+    }
+    else if (form) {                /* zlib */
+        PUT4M(tail, check);
+        writen(outd, tail, 4);
+    }
+    else {                          /* gzip */
+        PUT4L(tail, check);
+        PUT4L(tail + 4, ulen);
+        writen(outd, tail, 8);
     }
 }
 
@@ -707,15 +863,12 @@ local void *compress_thread(void *arg)
         len -= MAX;
     }
 
-    /* run last piece through deflate and check, follow with a sync marker */
-    if (len) {
-        strm->avail_in = len;
-        strm->avail_out = (unsigned)-1;
-        check = CHECK(check, strm->next_in, strm->avail_in);
-        (void)deflate(strm, Z_SYNC_FLUSH);
-    }
-
-    /* don't need to Z_FINISH, since we'd delete the last two bytes anyway */
+    /* run last piece through deflate and check -- terminate with sync marker,
+       or finish deflate stream if this is the last block */
+    strm->avail_in = len;
+    strm->avail_out = (unsigned)-1;
+    check = CHECK(check, strm->next_in, strm->avail_in);
+    (void)deflate(strm, job->len < size ? Z_FINISH : Z_SYNC_FLUSH);
 
     /* return result */
     job->check = check;
@@ -729,16 +882,17 @@ local void *write_thread(void *arg)
 {
     int n;                          /* compress thread index */
     size_t len;                     /* length of input processed */
-    unsigned long tot;              /* total uncompressed size (overflow ok) */
+    unsigned long head;             /* header length */
+    unsigned long ulen;             /* total uncompressed size (overflow ok) */
+    unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
-    unsigned char tail[10];         /* last deflate block and gzip trailer */
 
     /* build and write gzip header */
     Trace(("-- write thread running"));
-    put_header();
+    head = put_header();
 
     /* process output of compress threads until end of input */    
-    tot = 0;
+    ulen = clen = 0;
     check = CHECK(0L, Z_NULL, 0);
     n = 0;
     do {
@@ -753,7 +907,8 @@ local void *write_thread(void *arg)
         Trace(("-- writing %d", n));
         writen(outd, jobs[n].out, jobs[n].strm.next_out - jobs[n].out);
         len = jobs[n].len;
-        tot += len;
+        ulen += len;
+        clen += jobs[n].strm.next_out - jobs[n].out;
         Trace(("-- wrote %d", n));
         check = COMB(check, jobs[n].check, len);
 
@@ -769,15 +924,8 @@ local void *write_thread(void *arg)
         /* an input buffer less than size in length indicates end of input */
     } while (len == size);
 
-    /* write final static block and trailer (check and if gzip, length) */
-    tail[0] = 3;  tail[1] = 0;
-    if (zlib)
-        PUT4M(tail + 2, check);
-    else {
-        PUT4L(tail + 2, check);
-        PUT4L(tail + 6, tot);
-    }
-    writen(outd, tail, zlib ? 6 : 10);
+    /* write trailer */
+    put_trailer(ulen, clen, check, head);
     return NULL;
 }
 
@@ -839,13 +987,14 @@ local void read_thread(void)
 local void single_gzip(void)
 {
     size_t got;                     /* amount read */
-    unsigned long tot;              /* total uncompressed size (overflow ok) */
+    unsigned long head;             /* header length */
+    unsigned long ulen;             /* total uncompressed size (overflow ok) */
+    unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
-    unsigned char tail[8];          /* gzip trailer */
     z_stream *strm;                 /* convenient pointer */
 
     /* write gzip header */
-    put_header();
+    head = put_header();
 
     /* if first time, initialize buffers and deflate */
     jobs_new();
@@ -855,12 +1004,12 @@ local void single_gzip(void)
     /* do raw deflate and calculate check value */
     strm = &(jobs->strm);
     (void)deflateReset(strm);
-    tot = 0;
+    ulen = clen = 0;
     check = CHECK(0L, Z_NULL, 0);
     do {
         /* read some data to compress */
         got = readn(ind, jobs->buf, size);
-        tot += (unsigned long)got;
+        ulen += (unsigned long)got;
         strm->next_in = jobs->buf;
 
         /* compress MAX-size chunks in case unsigned type is small */
@@ -872,6 +1021,7 @@ local void single_gzip(void)
                 strm->next_out = jobs->out;
                 (void)deflate(strm, Z_NO_FLUSH);
                 writen(outd, jobs->out, size - strm->avail_out);
+                clen += size - strm->avail_out;
             } while (strm->avail_out == 0);
             got -= MAX;
         }
@@ -886,42 +1036,17 @@ local void single_gzip(void)
             (void)deflate(strm, got < size ? Z_FINISH :
                             (dict ? Z_NO_FLUSH : Z_FULL_FLUSH));
             writen(outd, jobs->out, size - strm->avail_out);
+            clen += size - strm->avail_out;
         } while (strm->avail_out == 0);
 
         /* do until read doesn't fill buffer */
     } while (got == size);
 
     /* write trailer */
-    if (zlib)
-        PUT4M(tail, check);
-    else {
-        PUT4L(tail, check);
-        PUT4L(tail + 4, tot);
-    }
-    writen(outd, tail, zlib ? 4 : 8);
+    put_trailer(ulen, clen, check, head);
 }
 
-/* find gzip suffix, return length of suffix */
-local size_t gz_suffix(char *nm)
-{
-    size_t len;
-
-    len = strlen(nm);
-    if (len > 3) {
-        nm += len - 3;
-        len = 3;
-        if (strcmp(nm, ".gz") == 0 || strcmp(nm, "-gz") == 0 ||
-            strcmp(nm, ".zz") == 0 || strcmp(nm, "-zz") == 0)
-            return 3;
-    }
-    if (len > 2) {
-        nm += len - 2;
-        if (strcmp(nm, ".z") == 0 || strcmp(nm, "-z") == 0 ||
-            strcmp(nm, "_z") == 0 || strcmp(nm, ".Z") == 0)
-            return 2;
-    }
-    return 0;
-}
+/* --- decompression --- */
 
 /* globals for decompression and listing buffered reading */
 #define BUF 32768U                  /* input buffer size */
@@ -938,6 +1063,8 @@ local unsigned long out_check;      /* check value of output */
                     in_left ? (in_tot += in_left) : (in_eof = 1), in_left))
 #define GET() (in_eof || (in_left == 0 && LOAD() == 0) ? EOF : \
                (in_left--, *in_next++))
+#define GET2() (tmp2 = GET(), tmp2 + (GET() << 8))
+#define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
 #define SKIP(dist) \
     do { \
         size_t togo = (dist); \
@@ -950,16 +1077,96 @@ local unsigned long out_check;      /* check value of output */
         in_next += togo; \
     } while (0)
 
-/* read a gzip, zlib, or lzw header from ind and extract useful information,
-   return method -- or on error return negative: -1 is premature EOF, -2 is not
-   a recognized compressed format, -3 is unexpected header flag values; a
-   method of 256 is lzw -- set zlib if zlib */
+/* convert MS-DOS date and time to a Unix time, assuming current timezone
+   (you got a better idea?) */
+local time_t dos2time(unsigned long dos)
+{
+    struct tm tm;
+
+    if (dos == 0)
+        return time(NULL);
+    tm.tm_year = ((int)(dos >> 25) & 0x7f) + 80;
+    tm.tm_mon  = ((int)(dos >> 21) & 0xf) - 1;
+    tm.tm_mday = (int)(dos >> 16) & 0x1f;
+    tm.tm_hour = (int)(dos >> 11) & 0x1f;
+    tm.tm_min  = (int)(dos >> 5) & 0x3f;
+    tm.tm_sec  = (int)(dos << 1) & 0x3e;
+    tm.tm_isdst = -1;           /* figure out if DST or not */
+    return mktime(&tm);
+}
+
+/* convert an unsigned 32-bit integer to signed, even if long > 32 bits */
+local long tolong(unsigned long val)
+{
+    return (long)(val & 0x7fffffffUL) - (long)(val & 0x80000000UL);
+}
+
+#define LOW32 0xffffffffUL
+
+/* process zip extra field to extract zip64 lengths and Unix mod time */
+local int read_extra(unsigned len, int save)
+{
+    unsigned id, size, tmp2;
+    unsigned long tmp4;
+
+    /* process extra blocks */
+    while (len >= 4) {
+        id = GET2();
+        size = GET2();
+        if (in_eof)
+            return -1;
+        len -= 4;
+        if (size > len)
+            break;
+        len -= size;
+        if (id == 0x0001) {
+            /* Zip64 Extended Information Extra Field */
+            if (zip_ulen == LOW32 && size >= 8) {
+                zip_ulen = GET4();
+                SKIP(4);
+                size -= 8;
+            }
+            if (zip_clen == LOW32 && size >= 8) {
+                zip_clen = GET4();
+                SKIP(4);
+                size -= 8;
+            }
+        }
+        if (save) {
+            if ((id == 0x000d || id == 0x5855) && size >= 8) {
+                /* PKWare Unix or Info-ZIP Type 1 Unix block */
+                SKIP(4);
+                stamp = tolong(GET4());
+                size -= 8;
+            }
+            if (id == 0x5455 && size >= 5) {
+                /* Extended Timestamp block */
+                size--;
+                if (GET() & 1) {
+                    stamp = tolong(GET4());
+                    size -= 4;
+                }
+            }
+        }
+        SKIP(size);
+    }
+    SKIP(len);
+    return 0;
+}
+
+/* read a gzip, zip, zlib, or lzw header from ind and extract useful
+   information, return the method -- or on error return negative: -1 is
+   immediate EOF, -2 is not a recognized compressed format, -3 is premature EOF
+   within the header, -4 is unexpected header flag values; a method of 256 is
+   lzw -- set form to indicate gzip, zlib, or zip */
 local int get_header(int save)
 {
     unsigned magic;             /* magic header */
     int method;                 /* compression method */
     int flags;                  /* header flags */
-    unsigned extra;             /* extra field length */
+    unsigned fname, extra;      /* name and extra field lengths */
+    unsigned tmp2;              /* for macro */
+    unsigned long tmp4;         /* for macro */
 
     /* clear return information */
     if (save) {
@@ -968,17 +1175,65 @@ local int get_header(int save)
     }
 
     /* see if it's a gzip, zlib, or lzw file */
-    zlib = 0;
+    form = 0;
     magic = GET() << 8;
+    if (in_eof)
+        return -1;
     magic += GET();
     if (in_eof)
         return -2;
     if (magic % 31 == 0) {          /* it's zlib */
-        zlib = 1;
+        form = 1;
         return (int)((magic >> 8) & 0xf);
     }
     if (magic == 0x1f9d)            /* it's lzw */
         return 256;
+    if (magic == 0x504b) {          /* it's zip */
+        if (GET() != 3 || GET() != 4)
+            return -3;
+        SKIP(2);
+        flags = GET2();
+        if (in_eof)
+            return -3;
+        if (flags & 0xfff0)
+            return -4;
+        method = GET2();
+        if (flags & 1)              /* encrypted */
+            method = 255;           /* mark as unknown method */
+        if (in_eof)
+            return -3;
+        if (save)
+            stamp = dos2time(GET4());
+        else
+            SKIP(4);
+        zip_crc = GET4();
+        zip_clen = GET4();
+        zip_ulen = GET4();
+        fname = GET2();
+        extra = GET2();
+        if (save) {
+            char *next = hname = malloc(fname + 1);
+            if (hname == NULL)
+                bail("not enough memory", "");
+            while (fname > in_left) {
+                memcpy(next, in_next, in_left);
+                fname -= in_left;
+                next += in_left;
+                if (LOAD() == 0)
+                    return -3;
+            }
+            memcpy(next, in_next, fname);
+            in_left -= fname;
+            in_next += fname;
+            next += fname;
+            *next = 0;
+        }
+        else
+            SKIP(fname);
+        read_extra(extra, save);
+        form = 2 + ((flags & 8) >> 3);
+        return in_eof ? -3 : method;
+    }
     if (magic != 0x1f8b)            /* not gzip */
         return -2;
 
@@ -988,28 +1243,22 @@ local int get_header(int save)
     if (in_eof)
         return -1;
     if (flags & 0xe0)
-        return -3;
+        return -4;
 
     /* get time stamp */
-    if (save) {
-        stamp = GET();
-        stamp += GET() << 8;
-        stamp += GET() << 16;
-        stamp += GET() << 24;
-    }
+    if (save)
+        stamp = tolong(GET4());
     else
         SKIP(4);
 
-    /* get extra field (for listing) and skip OS */
-    xfl = GET();
-    SKIP(1);
+    /* skip extra field and OS */
+    SKIP(2);
 
     /* skip extra field, if present */
     if (flags & 4) {
-        extra = GET();
-        extra += GET() << 8;
+        extra = GET2();
         if (in_eof)
-            return -1;
+            return -3;
         SKIP(extra);
     }
 
@@ -1023,7 +1272,7 @@ local int get_header(int save)
         have = 0;
         do {
             if (in_left == 0 && LOAD() == 0)
-                return -1;
+                return -3;
             end = memchr(in_next, 0, in_left);
             copy = end == NULL ? in_left : (end - in_next) + 1;
             if (have + copy > size) {
@@ -1042,13 +1291,13 @@ local int get_header(int save)
     else if (flags & 8)
         while (GET() != 0)
             if (in_eof)
-                return -1;
+                return -3;
 
     /* skip comment */
     if (flags & 16)
         while (GET() != 0)
             if (in_eof)
-                return -1;
+                return -3;
 
     /* skip header crc */
     if (flags & 2)
@@ -1056,6 +1305,36 @@ local int get_header(int save)
 
     /* return compression method */
     return method;
+}
+
+/* --- list contents of compressed input (gzip, zlib, or lzw) */
+
+/* find standard compressed file suffix, return length of suffix */
+local size_t compressed_suffix(char *nm)
+{
+    size_t len;
+
+    len = strlen(nm);
+    if (len > 4) {
+        nm += len - 4;
+        len = 4;
+        if (strcmp(nm, ".zip") == 0 || strcmp(nm, ".ZIP") == 0)
+            return 4;
+    }
+    if (len > 3) {
+        nm += len - 3;
+        len = 3;
+        if (strcmp(nm, ".gz") == 0 || strcmp(nm, "-gz") == 0 ||
+            strcmp(nm, ".zz") == 0 || strcmp(nm, "-zz") == 0)
+            return 3;
+    }
+    if (len > 2) {
+        nm += len - 2;
+        if (strcmp(nm, ".z") == 0 || strcmp(nm, "-z") == 0 ||
+            strcmp(nm, "_z") == 0 || strcmp(nm, ".Z") == 0)
+            return 2;
+    }
+    return 0;
 }
 
 /* listing file name lengths for -l and -lv */
@@ -1068,7 +1347,7 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
     int max;                /* maximum name length for current verbosity */
     size_t n;               /* name length without suffix */
     time_t now;             /* for getting current year */
-    char mod[27];           /* modification time in text */
+    char mod[26];           /* modification time in text */
     char name[NAMEMAX1+1];  /* header or file name, possibly truncated */
 
     /* create abbreviated name from header file name or actual file name */
@@ -1077,7 +1356,7 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
     if (cont)
         strncpy(name, "<...>", max + 1);
     else if (hname == NULL) {
-        n = strlen(in) - gz_suffix(in);
+        n = strlen(in) - compressed_suffix(in);
         strncpy(name, in, n > max + 1 ? max + 1 : n);
     }
     else
@@ -1087,6 +1366,7 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
 
     /* convert time stamp to text */
     if (stamp) {
+        strcpy(mod, ctime(&stamp));
         ctime_r(&stamp, mod);
         now = time(NULL);
         if (strcmp(mod + 20, ctime(&now) + 20) != 0)
@@ -1107,19 +1387,20 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
 
     /* print information */
     if (verbosity > 1) {
-        if (zlib)
-            printf("zlib%2d  --------  %s  ", method, mod + 4);
-        else if (method == 8)
-            printf("def%s  %08lx  %s  ",
-                xfl & 2 ? "(9)" : (xfl & 4 ? "(1)" : "   "),
-                check, mod + 4);
+        if (form == 3 && !decode)
+            printf("zip%3d  --------  %s  ", method, mod + 4);
+        else if (form > 1)
+            printf("zip%3d  %08lx  %s  ", method, check, mod + 4);
+        else if (form)
+            printf("zlib%2d  %08lx  %s  ", method, check, mod + 4);
         else if (method == 256)
             printf("lzw     --------  %s  ", mod + 4);
         else
-            printf("%6d  %08lx  %s  ", method, check, mod + 4);
+            printf("gzip%2d  %08lx  %s  ", method, check, mod + 4);
     }
     if (verbosity > 0) {
-        if ((method == 8 && in_tot > (len + (len >> 10) + 12)) ||
+        if ((form == 3 && !decode) ||
+            (method == 8 && in_tot > (len + (len >> 10) + 12)) ||
             (method == 256 && in_tot > len + (len >> 1) + 3))
             printf("%10llu %10llu?  unk    %s\n",
                    in_tot, len, name);
@@ -1151,20 +1432,51 @@ local void list_info(void)
     method = get_header(1);
     if (method < 0) {
         RELEASE(hname);
-        if (verbosity > 1)
+        if (method != -1 && verbosity > 1)
             fprintf(stderr, "%s not a compressed file -- skipping\n", in);
         return;
     }
 
-    /* list lzw or zlib file */
-    if (zlib || method == 256) {
+    /* list zip file */
+    if (form > 1) {
+        in_tot = zip_clen;
+        show_info(method, zip_crc, zip_ulen, 0);
+        return;
+    }
+
+    /* list zlib file */
+    if (form) {
+        at = lseek(ind, 0, SEEK_END);
+        if (at == -1) {
+            check = 0;
+            do {
+                len = in_left < 4 ? in_left : 4;
+                in_next += in_left - len;
+                while (len--)
+                    check = (check << 8) + *in_next++;
+            } while (LOAD() != 0);
+            check &= LOW32;
+        }
+        else {
+            in_tot = at;
+            lseek(ind, -4, SEEK_END);
+            readn(ind, tail, 4);
+            check = (*tail << 24) + (tail[1] << 16) + (tail[2] << 8) + tail[3];
+        }
+        in_tot -= 6;
+        show_info(method, check, 0, 0);
+        return;
+    }
+
+    /* list lzw file */
+    if (method == 256) {
         at = lseek(ind, 0, SEEK_END);
         if (at == -1)
             while (LOAD() != 0)
                 ;
         else
             in_tot = at;
-        in_tot -= zlib ? 6 : 3;
+        in_tot -= 3;
         show_info(method, 0, 0, 0);
         return;
     }
@@ -1222,6 +1534,8 @@ local void list_info(void)
     show_info(method, check, len, 0);
     RELEASE(hname);
 }
+
+/* --- decompress gzip or zlib input --- */
 
 /* call-back input function for inflateBack() */
 local unsigned inb(void *desc, unsigned char **buf)
@@ -1287,18 +1601,22 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
 
 #endif
 
-/* output buffer and window for ungz() and unlzw() */
-#define OUTSIZE 32768U      /* must be at least 32K for ungz() window */
+/* output buffer and window for infchk() and unlzw() */
+#define OUTSIZE 32768U      /* must be at least 32K for inflateBack() window */
 local unsigned char outbuf[OUTSIZE];
 
 /* inflate for decompression or testing -- decompress from ind to outd unless
    decode != 1, in which case just test ind, and then also list if list != 0;
-   look for and decode multiple, concatenated gzip streams */
-local void ungz(void)
+   look for and decode multiple, concatenated gzip and/or zlib streams;
+   read and check the gzip, zlib, or zip trailer */
+local void infchk(void)
 {
     int ret, cont;
     unsigned long check, len;
     z_stream strm;
+    unsigned tmp2;
+    unsigned long tmp4;
+    off_t clen;
 
     cont = 0;
     do {
@@ -1318,50 +1636,81 @@ local void ungz(void)
         strm.next_in = in_next;
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         if (ret != Z_STREAM_END)
-            bail("corrupted gzip file -- invalid defate data: ", in);
+            bail("corrupted input -- invalid deflate data: ", in);
         in_left = strm.avail_in;
         in_next = strm.next_in;
         inflateBackEnd(&strm);
 
+        /* compute compressed data length */
+        clen = in_tot - in_left;
+
         /* read and check trailer */
-        if (zlib) {
+        if (form > 1) {             /* zip local trailer (if any) */
+            if (form == 3) {        /* data descriptor follows */
+                /* read original version of data descriptor*/
+                zip_crc = GET4();
+                zip_clen = GET4();
+                zip_ulen = GET4();
+                if (in_eof)
+                    bail("corrupted zip entry -- missing trailer: ", in);
+
+                /* if crc doesn't match, try info-zip variant with sig */
+                if (zip_crc != out_check) {
+                    if (zip_crc != 0x08074b50UL || zip_clen != out_check)
+                        bail("corrupted zip entry -- crc32 mismatch: ", in);
+                    zip_crc = zip_clen;
+                    zip_clen = zip_ulen;
+                    zip_ulen = GET4();
+                }
+
+                /* if second length doesn't match, try 64-bit lengths */
+                if (zip_ulen != (out_tot & LOW32)) {
+                    zip_ulen = GET4();
+                    GET4();
+                }
+                if (in_eof)
+                    bail("corrupted zip entry -- missing trailer: ", in);
+            }
+            if (zip_clen != (clen & LOW32) || zip_ulen != (out_tot & LOW32))
+                bail("corrupted zip entry -- length mismatch: ", in);
+            check = zip_crc;
+        }
+        else if (form == 1) {       /* zlib (big-endian) trailer */
             check = GET() << 24;
             check += GET() << 16;
             check += GET() << 8;
             check += GET();
             if (in_eof)
                 bail("corrupted zlib stream -- missing trailer: ", in);
-            if (check != (out_check & 0xffffffffUL))
+            if (check != out_check)
                 bail("corrupted zlib stream -- adler32 mismatch: ", in);
         }
-        else {          /* gzip */
-            check = GET();
-            check += GET() << 8;
-            check += GET() << 16;
-            check += GET() << 24;
-            len = GET();
-            len += GET() << 8;
-            len += GET() << 16;
-            len += GET() << 24;
+        else {                      /* gzip trailer */
+            check = GET4();
+            len = GET4();
             if (in_eof)
                 bail("corrupted gzip stream -- missing trailer: ", in);
-            if (check != (out_check & 0xffffffffUL))
+            if (check != out_check)
                 bail("corrupted gzip stream -- crc32 mismatch: ", in);
-            if (len != (out_tot & 0xffffffffUL))
+            if (len != (out_tot & LOW32))
                 bail("corrupted gzip stream -- length mismatch: ", in);
         }
 
         /* show file information if requested */
         if (list) {
-            in_tot -= in_left + (zlib ? 4 : 8);
+            in_tot = clen;
             show_info(8, check, out_tot, cont);
             cont = 1;
         }
 
-        /* if there's another gzip or zlib entry, decompress it (don't replace
-           saved header information from first entry) */
-    } while (get_header(0) == 8);
+        /* if a gzip or zlib entry follows a gzip or zlib entry, decompress it
+           (don't replace saved header information from first entry) */
+    } while (form < 2 && (ret = get_header(0)) == 8 && form < 2);
+    if (ret != -1 && form < 2)
+        fprintf(stderr, "%s OK, has trailing junk which was ignored\n", in);
 }
+
+/* --- decompress Unix compress (LZW) input --- */
 
 /* memory for unlzw() --
    the first 256 entries of prefix[] and suffix[] are never used, could
@@ -1551,6 +1900,8 @@ local void unlzw(void)
     }
 }
 
+/* --- file processing --- */
+
 /* extract file name from path */
 local char *justname(char *path)
 {
@@ -1728,12 +2079,13 @@ local void process(char *path)
             return;
         }
 
-        /* only decompress or list files with gz-ish suffix */
+        /* only decompress or list files with compressed suffix */
         if (list || decode) {
-            int suf = gz_suffix(in);
+            int suf = compressed_suffix(in);
             if (suf == 0) {
                 if (verbosity > 0)
-                    fprintf(stderr, "%s has no gzip suffix -- skipping\n",
+                    fprintf(stderr,
+                            "%s does not have compressed suffix -- skipping\n",
                             in);
                 return;
             }
@@ -1762,10 +2114,10 @@ local void process(char *path)
             RELEASE(hname);
             if (ind != 0)
                 close(ind);
-            if (verbosity > 0)
+            if (method != -1 && verbosity > 0)
                 fprintf(stderr,
                     method < 0 ? "%s is not compressed -- skipping\n" :
-                        "unknown compression method used in %s -- skipping\n",
+                        "%s has unknown compression method -- skipping\n",
                     in);
             return;
         }
@@ -1773,7 +2125,7 @@ local void process(char *path)
         /* if requested, test input file (possibly a special list) */
         if (decode == 2) {
             if (method == 8)
-                ungz();
+                infchk();
             else {
                 unlzw();
                 if (list) {
@@ -1868,7 +2220,7 @@ local void process(char *path)
         fprintf(stderr, "%s to %s ", in, out);
     if (decode) {
         if (method == 8)
-            ungz();
+            infchk();
         else
             unlzw();
     }
@@ -1917,6 +2269,7 @@ local char *helptext[] = {
 "  -p, --processes n    Allow up to n compression threads (default 32)",
 #endif
 "  -i, --independent    Compress blocks independently for damage recovery",
+"  -R, --rsyncable      Input-determined block locations for rsync",
 "  -d, --decompress     Decompress the compressed input",
 "  -t, --test           Test the integrity of the compressed input",
 "  -l, --list           List the contents of the compressed input",
@@ -1965,6 +2318,7 @@ local void defaults(void)
     procs = 32;
 #endif
     size = 131072UL;
+    rsync = 0;                      /* don't do rsync blocking */
     dict = 1;                       /* initialize dictionary each thread */
     verbosity = 1;                  /* normal message level */
     headis = 3;                     /* store/restore name and timestamp */
@@ -1975,7 +2329,7 @@ local void defaults(void)
     keep = 0;                       /* delete input file once compressed */
     force = 0;                      /* don't overwrite, don't compress links */
     recurse = 0;                    /* don't go into directories */
-    zlib = 0;                       /* use gzip format */
+    form = 0;                       /* use gzip format */
 }
 
 /* long options conversion to short options */
@@ -1984,9 +2338,10 @@ local char *longopts[][2] = {
     {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"force", "f"},
     {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
     {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "T"},
-    {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"silent", "q"},
-    {"stdout", "c"}, {"suffix", "s"}, {"test", "t"}, {"to-stdout", "c"},
-    {"uncompress", "d"}, {"verbose", "v"}, {"version", "V"}, {"zlib", "z"}};
+    {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
+    {"silent", "q"}, {"stdout", "c"}, {"suffix", "s"}, {"test", "t"},
+    {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
+    {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
 /* process an option, return true if a file name and not an option */
@@ -2035,6 +2390,7 @@ local int option(char *arg)
                 jobs_free();
                 level = *arg - '0';
                 break;
+            case 'K':  form = 2;  sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
                 fputs("Copyright (C) 2007 Mark Adler\n", stderr);
@@ -2044,6 +2400,8 @@ local int option(char *arg)
                 exit(0);
             case 'N':  headis = 3;  break;
             case 'T':  headis &= ~2;  break;
+            case 'R':  rsync = 1;
+                bail("rsyncable not implemented yet", "");
             case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
                 bail("invalid option: LZW output not supported", "");
@@ -2064,7 +2422,7 @@ local int option(char *arg)
             case 's':  get |= 4;  break;
             case 't':  decode = 2;  break;
             case 'v':  verbosity++;  break;
-            case 'z':  zlib = 1;  sufx = ".zz";  break;
+            case 'z':  form = 1;  sufx = ".zz";  break;
             default:
                 arg[1] = 0;
                 bail("invalid option: -", arg);
@@ -2111,7 +2469,7 @@ local int option(char *arg)
 int main(int argc, char **argv)
 {
     int n;                          /* general index */
-    int none;                       /* true if no input names provided */
+    unsigned long done;             /* number of named files processed */
     char *opts, *p;                 /* environment default options, marker */
 
     /* prepare for interrupts and logging */
@@ -2151,16 +2509,20 @@ int main(int argc, char **argv)
         help();
 
     /* process command-line arguments */
-    none = 1;
+    done = 0;
     for (n = 1; n < argc; n++)
         if (option(argv[n])) {          /* true if file name, process it */
-            none = 0;
+            if (done == 1 && pipeout && !decode && !list && form > 1) {
+                fprintf(stderr, "warning: output is concatenated zip files ");
+                fprintf(stderr, "-- pigz will not be able to extract\n");
+            }
             process(strcmp(argv[n], "-") ? argv[n] : NULL);
+            done++;
         }
     option(NULL);
 
     /* list stdin or compress stdin to stdout if no file names provided */
-    if (none)
+    if (done == 0)
         process(NULL);
 
     /* done -- release work units allocated by compression */
