@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010 Mark Adler
- * Version 2.1.6  17 Jan 2010  Mark Adler
+ * Version 2.1.7  xx Feb 2010  Mark Adler
  */
 
 /*
@@ -106,9 +106,10 @@
                        Decompress if executable named "gunzip" [Hoffstätte]
                        Allow ".tgz" suffix [Chernookiy]
                        Fix adler32 comparison on .zz files
+   2.1.7  xx Feb 2010  --
  */
 
-#define VERSION "pigz 2.1.6\n"
+#define VERSION "pigz 2.1.7\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
