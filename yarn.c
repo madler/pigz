@@ -199,6 +199,8 @@ local void reenter(void *dummy)
     thread *match, **prior;
     pthread_t me;
 
+    (void)dummy;
+
     /* find this thread in the threads list by matching the thread id */
     me = pthread_self();
     possess(&(threads_lock));
