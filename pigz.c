@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.11  28 Oct 2008  Mark Adler
+ * Version 2.1.2  30 Oct 2008  Mark Adler
  */
 
 /*
@@ -78,7 +78,7 @@
    2.0    19 Oct 2008  Complete rewrite of thread usage and synchronization
                        Use polling threads and a pool of memory buffers
                        Remove direct pthread library use, hide in yarn.c
-   2.01   20 Oct 2008  Check version of zlib at compile time, need >= 1.2.3
+   2.0.1  20 Oct 2008  Check version of zlib at compile time, need >= 1.2.3
    2.1    24 Oct 2008  Decompress with read, write, inflate, and check threads
                        Remove spurious use of ctime_r(), ctime() more portable
                        Change application of job->calc lock to be a semaphore
@@ -87,11 +87,12 @@
                        Remove _LARGEFILE64_SOURCE, _FILE_OFFSET_BITS is enough
                        Detect file-too-large error and report, blame build
                        Replace check combination routines with those from zlib
-   2.11   28 Oct 2008  Fix a bug for files with an integer number of blocks
+   2.1.1  28 Oct 2008  Fix a leak for files with an integer number of blocks
                        Update for yarn 1.1 (yarn_prefix and yarn_abort)
+   2.1.2  30 Oct 2008  Work around use of beta zlib in production systems
  */
 
-#define VERSION "pigz 2.11\n"
+#define VERSION "pigz 2.1.2\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -239,6 +240,8 @@
 #include <dirent.h>     /* opendir(), readdir(), closedir(), DIR, */
                         /* struct dirent */
 #include <limits.h>     /* PATH_MAX */
+
+#undef _FILE_OFFSET_BITS    /* work around combine function parameters issue */
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
                            Z_DEFAULT_COMPRESSION, Z_DEFAULT_STRATEGY,
@@ -247,6 +250,8 @@
 #if !defined(ZLIB_VERNUM) || ZLIB_VERNUM < 0x1230
 #  error Need zlib version 1.2.3 or later
 #endif
+#define _FILE_OFFSET_BITS 64
+
 #ifndef NOTHREAD
 #  include "yarn.h"     /* thread, launch(), join(), join_all(), */
                         /* lock, new_lock(), possess(), twist(), wait_for(),
