@@ -1,0 +1,42 @@
+pigz 2.0 (19 Oct 2008) by Mark Adler
+
+pigz, which stands for Parallel Implementation of GZip, is a fully functional
+replacement for gzip that exploits multiple processors and multiple cores to
+the hilt when compressing data.
+
+pigz was written by Mark Adler, and uses the zlib and pthread libraries.
+
+This version of pigz is written to be portable across Unix-style operating
+systems that provide the zlib and pthread libraries.  Type "make" in this
+directory to build the "pigz" executable.  You can then install the
+executable wherever you like in your path (e.g. /usr/local/bin/).  Type
+"pigz" to see the command help and all of the command options.
+
+The latest version of pigz can be found at http://zlib.net/pigz/ .  Questions, comments, bug reports, fixes, etc. can be emailed to Mark at his address in the license below.
+
+The license from pigz.c is copied here:
+
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the author be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+
+  Mark Adler
+  madler@alumni.caltech.edu
+
+  Mark accepts donations for providing this software.  Donations are not
+  required or expected.  Any amount that you feel is appropriate would be
+  appreciated.  You can use this link:
+
+  https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=536055
