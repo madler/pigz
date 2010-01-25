@@ -1,0 +1,186 @@
+.TH PIGZ 1 local
+.SH NAME
+pigz, unpigz \- compress or expand files
+.SH SYNOPSIS
+.ll +8
+.B pigz
+.RB [ " \-cdfhikKlLnNqrRtTz0..9 " ]
+[
+.B -b
+.I blocksize
+]
+[
+.B -p
+.I threads
+]
+[
+.B -S
+.I suffix
+]
+[
+.I "name \&..."
+]
+.ll -8
+.br
+.B unpigz
+.RB [ " \-cfhikKlLnNqrRtTz " ]
+[
+.B -b
+.I blocksize
+]
+[
+.B -p
+.I threads
+]
+[
+.B -S
+.I suffix
+]
+[
+.I "name \&..."
+]
+.SH DESCRIPTION
+.I Pigz
+compresses using threads to make use of multiple processors and cores.
+The input is broken up into 128 KB chunks with each compressed in parallel.
+The individual check value for each chunk is also calculated in parallel.
+The compressed data is written in order to the output, and a combined check
+value is calculated from the individual check values.
+.PP
+The compressed data format generated is in the gzip, zlib, or single-entry
+zip format using the deflate compression method.  The compression produces
+partial raw deflate streams which are concatenated by a single write thread
+and wrapped with the appropriate header and trailer, where the trailer
+contains the combined check value.
+.PP
+Each partial raw deflate stream is terminated by an empty stored block
+(using the Z_SYNC_FLUSH option of zlib), in order to end that partial bit
+stream at a byte boundary.  That allows the partial streams to be
+concatenated simply as sequences of bytes.  This adds a very small four to
+five byte overhead to the output for each input chunk.
+.PP
+The default input block size is 128K, but can be changed with the
+.B -b
+option.  The number of compress threads is set by default to 4,
+which can be changed using the 
+.B -p
+option.  Specifying
+.B -p 1
+avoids the use of threads entirely.
+.PP
+The input blocks, while compressed independently, have the last 32K of the
+previous block loaded as a preset dictionary to preserve the compression
+effectiveness of deflating in a single thread.  This can be turned off using
+the
+.B -i
+or
+.B --independent
+option, so that the blocks can be decompressed
+independently for partial error recovery or for random access.
+.PP
+Decompression can't be parallelized, at least not without specially prepared
+deflate streams for that purpose.  As a result,
+.I pigz
+uses a single thread
+(the main thread) for decompression, but will create three other threads for
+reading, writing, and check calculation, which can speed up decompression
+under some circumstances.  Parallel decompression can be turned off by
+specifying one process 
+(
+.B -dp 1
+or
+.B -tp 1
+).
+.PP
+Compressed files can be restored to their original form using
+.I pigz -d
+or
+.I unpigz.
+
+.SH OPTIONS
+.TP
+.B -# --fast --best
+Regulate the speed of compression using the specified digit
+.IR # ,
+where
+.B \-1
+or
+.B \-\-fast
+indicates the fastest compression method (less compression)
+and
+.B \-9
+or
+.B \-\-best
+indicates the slowest compression method (best compression).
+Level 0 is no compression.
+.TP
+.B -b --blocksize mmm
+Set compression block size to mmmK (default 128KiB).
+.TP
+.B -c --stdout --to-stdout
+Write all processed output to stdout (won't delete).
+.TP
+.B -d --decompress --uncompress
+Decompress the compressed input.
+.TP
+.B -f --force
+Force overwrite, compress .gz, links, and to terminal.
+.TP
+.B -h --help
+Display a help screen and quit.
+.TP
+.B -i --independent
+Compress blocks independently for damage recovery.
+.TP
+.B -k --keep
+Do not delete original file after processing.
+.TP
+.B -K --zip
+Compress to PKWare zip (.zip) single entry format.
+.TP
+.B -l --list
+List the contents of the compressed input.
+.TP
+.B -L --license
+Display the
+.I pigz
+license and quit.
+.TP
+.B -n --no-name
+Do not store or restore file name in/from header.
+.TP
+.B -N --name
+Store/restore file name and mod time in/from header.
+.TP
+.B -p --processes n
+Allow up to n processes (default is the number of online processors)
+.TP
+.B -q --quiet --silent
+Print no messages, even on error.
+.TP
+.B -r --recursive
+Process the contents of all subdirectories.
+.TP
+.B -S --suffix .sss
+Use suffix .sss instead of .gz (for compression).
+.TP
+.B -t --test
+Test the integrity of the compressed input.
+.TP
+.B -T --no-time
+Do not store or restore mod time in/from header.
+.TP
+.B -v --verbose
+Provide more verbose output.
+.TP
+.B -V --version
+Show the version of pigz.
+.TP
+.B -z --zlib
+Compress to zlib (.zz) instead of gzip format.
+.SH "COPYRIGHT NOTICE"
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the author be held liable for any damages
+arising from the use of this software.
+.PP
+Copyright (C) 2007, 2008, 2009 Mark Adler <madler@alumni.caltech.edu>
