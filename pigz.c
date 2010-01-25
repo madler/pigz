@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.1  24 Oct 2008  Mark Adler
+ * Version 2.11  28 Oct 2008  Mark Adler
  */
 
 /*
@@ -87,9 +87,11 @@
                        Remove _LARGEFILE64_SOURCE, _FILE_OFFSET_BITS is enough
                        Detect file-too-large error and report, blame build
                        Replace check combination routines with those from zlib
+   2.11   28 Oct 2008  Fix a bug for files with an integer number of blocks
+                       Update for yarn 1.1 (yarn_prefix and yarn_abort)
  */
 
-#define VERSION "pigz 2.1\n"
+#define VERSION "pigz 2.11\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -113,12 +115,12 @@
    Each partial raw deflate stream is terminated by an empty stored block
    (using the Z_SYNC_FLUSH option of zlib), in order to end that partial bit
    stream at a byte boundary.  That allows the partial streams to be
-   concantenated simply as sequences of bytes.  This adds a very small four to
+   concatenated simply as sequences of bytes.  This adds a very small four to
    five byte overhead to the output for each input chunk.
 
    The default input block size is 128K, but can be changed with the -b option.
    The number of compress threads is set by default to 8, which can be changed
-   using -p option.  Specifiying -p 1 avoids the use of threads entirely.
+   using the -p option.  Specifying -p 1 avoids the use of threads entirely.
 
    The input blocks, while compressed independently, have the last 32K of the
    previous block loaded as a preset dictionary to preserve the compression
@@ -249,7 +251,6 @@
 #  include "yarn.h"     /* thread, launch(), join(), join_all(), */
                         /* lock, new_lock(), possess(), twist(), wait_for(),
                            release(), peek_lock(), free_lock(), yarn_name */
-   char *yarn_prefix = "pigz";      /* prefix for yarn error messages */
 #endif
 
 /* for local functions and globals */
@@ -295,7 +296,6 @@ local int rsync;            /* true for rsync blocking */
 local int procs;            /* maximum number of compression threads (>= 1) */
 local int dict;             /* true to initialize dictionary in each thread */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
-local struct timeval start; /* starting time of day for tracing */
 
 /* saved gzip/zip header data for decompression, testing, and listing */
 local time_t stamp;                 /* time stamp from gzip header */
@@ -316,6 +316,9 @@ local int bail(char *why, char *what)
 }
 
 #ifdef DEBUG
+
+/* starting time of day for tracing */
+local struct timeval start;
 
 /* trace log */
 local struct log {
@@ -666,7 +669,7 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
     }
 }
 
-/* compute check value depeding on format */
+/* compute check value depending on format */
 #define CHECK(a,b,c) (form == 1 ? adler32(a,b,c) : crc32(a,b,c))
 
 #ifndef NOTHREAD
@@ -1124,6 +1127,8 @@ local void parallel_compress(void)
             next = get_space(&in_pool);
             next->len = readn(ind, next->buf, next->pool->size);
             more = next->len != 0;
+            if (!more)
+                drop_space(next);       /* won't be using it */
             if (dict && more) {
                 use_space(job->in);     /* hold as dictionary for next loop */
                 prev = job->in;
@@ -1286,20 +1291,24 @@ local void load_read(void *dummy)
 {
     size_t len;
 
+    Trace(("-- launched decompress read thread"));
     do {
         possess(load_state);
         wait_for(load_state, TO_BE, 1);
         in_len = len = readn(ind, in_which ? in_buf : in_buf2, BUF);
+        Trace(("-- decompress read thread read %lu bytes", len));
         twist(load_state, TO, 0);
     } while (len == BUF);
+    Trace(("-- exited decompress read thread"));
 }
 
 #endif
 
-/* load an input buffer, and set in_next and in_left to that data, update
-   in_tot, return in_left (only called when in_left has gone to zero) --
-   in_eof is set to true when in_left has gone to zero and there is no
-   more input to be had */
+/* load() is called when in_left has gone to zero in order to provide more
+   input data: load the input buffer with BUF or less bytes (less if at end of
+   file) from the file ind, set in_next to point to the in_left bytes read,
+   update in_tot, and return in_left -- in_eof is set to true when in_left has
+   gone to zero and there is no more data left to read from ind */
 local size_t load(void)
 {
     /* if already detected end of file, do nothing */
@@ -1351,7 +1360,7 @@ local size_t load(void)
     if (in_left < BUF) {
         in_short = 1;
 
-        /* if we got bupkis, now's the time to mark eof */
+        /* if we got bupkis, now is the time to mark eof */
         if (in_left == 0)
             in_eof = 1;
     }
@@ -1373,7 +1382,7 @@ local void in_init(void)
 #endif
 }
 
-/* buffered reading macros for decompresion and listing */
+/* buffered reading macros for decompression and listing */
 #define GET() (in_eof || (in_left == 0 && load() == 0) ? EOF : \
                (in_left--, *in_next++))
 #define GET2() (tmp2 = GET(), tmp2 + (GET() << 8))
@@ -1651,8 +1660,8 @@ local size_t compressed_suffix(char *nm)
 }
 
 /* listing file name lengths for -l and -lv */
-#define NAMEMAX1 48     /* name display limit at vebosity 1 */
-#define NAMEMAX2 16     /* name display limit at vebosity 2 */
+#define NAMEMAX1 48     /* name display limit at verbosity 1 */
+#define NAMEMAX2 16     /* name display limit at verbosity 2 */
 
 /* print gzip or lzw file information */
 local void show_info(int method, unsigned long check, off_t len, int cont)
@@ -1866,7 +1875,7 @@ local unsigned char out_buf[OUTSIZE];
 local unsigned char out_copy[OUTSIZE];
 local size_t out_len;
 
-/* outb threads locks */
+/* outb threads states */
 local lock *outb_write_more = NULL;
 local lock *outb_check_more;
 
@@ -2735,7 +2744,7 @@ local int option(char *arg)
                  get & 1 ? "b" : (get & 2 ? "p" : "s"));
         arg++;
 
-        /* a single dash will be interpeted as stdin */
+        /* a single dash will be interpreted as stdin */
         if (*arg == 0)
             return 1;
 
@@ -2860,9 +2869,13 @@ int main(int argc, char **argv)
 
     /* prepare for interrupts and logging */
     signal(SIGINT, cut_short);
-    gettimeofday(&start, NULL);
+#ifndef NOTHREAD
+    yarn_prefix = "pigz";           /* prefix for yarn error messages */
+    yarn_abort = cut_short;         /* call on thread error */
+#endif
 #ifdef DEBUG
-    log_init();
+    gettimeofday(&start, NULL);     /* starting time for log entries */
+    log_init();                     /* initialize logging */
 #endif
 
     /* set all options to defaults */
