@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007 Mark Adler
- * Version 1.8  13 May 2007  Mark Adler
+ * Copyright (C) 2007, 2008 Mark Adler
+ * Version 2.0  19 Oct 2008  Mark Adler
  */
 
 /*
@@ -22,6 +22,13 @@
 
   Mark Adler
   madler@alumni.caltech.edu
+
+  Mark accepts donations for providing this software.  Donations are not
+  required or expected.  Any amount that you feel is appropriate would be
+  appreciated.  You can use this link:
+
+  https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=536055
+
  */
 
 /* Version history:
@@ -68,45 +75,46 @@
                        Make listings consistent, ignore gzip extra flags
                        Add zip stream compression (--zip)
    1.8    13 May 2007  Document --zip option in help output
+   2.0    19 Oct 2008  Complete rewrite of thread usage and synchronization
+                       Use polling threads and a pool of memory buffers
+                       Remove direct pthread library use, hide in yarn.c
  */
 
-#define VERSION "pigz 1.8\n"
+#define VERSION "pigz 2.0\n"
 
 /* To-do:
-    - add --rsyncable (or -R) [use my own algorithm, set min block size]
-    - rewrite parallelism to draw on reuseable threads from a thread pool
-    - make portable for Windows, VMS, etc. (see gzip source code)
-    - write a configure and Makefile to portably compile with pthread library
+    - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
+    - make source portable for Windows, VMS, etc. (see gzip source code)
+    - make build portable (currently good for Unixish)
  */
 
 /*
-   pigz compresses from stdin to stdout using threads to make use of multiple
-   processors and cores.  The input is broken up into 128 KB chunks, and each
-   is compressed separately.  The CRC for each chunk is also calculated
-   separately.  The compressed chunks are written in order to the output, and
-   the overall CRC is calculated from the CRC's of the chunks.
+   pigz compresses using threads to make use of multiple processors and cores.
+   The input is broken up into 128 KB chunks with each compressed in parallel.
+   The individual check value for each chunk is also calculated in parallel.
+   The compressed data is written in order to the output, and a combined check
+   value is calculated from the individual check values.
 
-   The compressed data format generated is in the gzip or zlib format using the
-   deflate compression method.  The input (uncompressed) data is broken up into
-   blocks, where each block is compressed independently in its own thread.  The
-   compression produces partial raw deflate streams which are concatenated by
-   a single write thread and wrapped with the gzip or zlib header and trailer.
+   The compressed data format generated is in the gzip, zlib, or single-entry
+   zip format using the deflate compression method.  The compression produces
+   partial raw deflate streams which are concatenated by a single write thread
+   and wrapped with the appropriate header and trailer, where the trailer
+   contains the combined check value.
 
    Each partial raw deflate stream is terminated by an empty stored block
    (using the Z_SYNC_FLUSH option of zlib), in order to end that partial bit
    stream at a byte boundary.  That allows the partial streams to be
-   concantenated simply as sequences of bytes.  This adds a very small four or
+   concantenated simply as sequences of bytes.  This adds a very small four to
    five byte overhead to the output for each input chunk.
 
-   The default input block size is 128K, and can be changed with the -b option.
-   The number of compress threads is limited by default to 32, where that can
-   be changed with the -p option.  Specifiying -p 1 avoids the use of threads
-   entirely.
+   The default input block size is 128K, but can be changed with the -b option.
+   The number of compress threads is set by default to 8, which can be changed
+   using -p option.  Specifiying -p 1 avoids the use of threads entirely.
 
-   The input blocks, while compressed independently, do have the last 32K of
-   the previous block loaded as a preset dictionary to preserve the compression
+   The input blocks, while compressed independently, have the last 32K of the
+   previous block loaded as a preset dictionary to preserve the compression
    effectiveness of deflating in a single thread.  This can be turned off using
-   the --independent option, so that the blocks can be decompressed
+   the --independent or -i option, so that the blocks can be decompressed
    independently for partial error recovery or for random access.
 
    pigz requires zlib 1.2.1 or later to allow setting the dictionary when doing
@@ -114,24 +122,87 @@
    this will effectively force the --independent option, somewhat degrading
    compression.
 
-   pigz uses the POSIX pthread library for thread control and communication.
-   It can be compiled with NOTHREAD #defined to not use threads at all (in
-   which case pigz will not be able to live up to its name).
+   pigz uses the POSIX pthread library for thread control and communication,
+   through the yarn.h interface to yarn.c.  yarn.c can be replaced with
+   equivalent implementations using other thread libraries.  pigz can be
+   compiled with NOTHREAD #defined to not use threads at all (in which case
+   pigz will not be able to live up to the "parallel" in its name).
 
-   Inflation cannot be parallelized, at least not without specially prepared
+   Decompression can't be parallelized, at least not without specially prepared
    deflate streams for that purpose.  For decompression, pigz only runs one
-   other thread for the check (CRC-32 or Adler-32) calculation, for a modest
+   other thread for the check (CRC-32 or Adler-32) calculation, for a small
    improvement in speed.
+ */
+
+/*
+   Details of parallel compression implementation:
+
+   When doing parallel compression, pigz uses the main thread to read the input
+   in 'size' sized chunks (see -b), and puts those in a compression job list,
+   each with a sequence number to keep track of the ordering.  If it is not the
+   first chunk, then that job also points to the previous input buffer, from
+   which the last 32K will be used as a dictionary (unless -i is specified).
+   This sets a lower limit of 32K on 'size'.
+
+   pigz launches up to 'procs' compression threads (see -p).  Each compression
+   thread continues to look for jobs in the compression list and perform those
+   jobs until instructed to return.  When a job is pulled, the dictionary, if
+   provided, will be loaded into the deflate engine and then that input buffer
+   is dropped for reuse.  Then the input data is compressed into an output
+   buffer sized to assure that it can contain maximally expanded deflate data.
+   The job is then put into the write job list, sorted by the sequence number.
+   The compress thread however continues to calculate the check value on the
+   input data, either a CRC-32 or Adler-32, possibly in parallel with the write
+   thread writing the output data.  Once that's done, the compress thread drops
+   the input buffer and also releases the lock on the check value so that the
+   write thread can combine it with the previous check values.  The compress
+   thread has then completed that job, and goes to look for another.
+
+   All of the compress threads are left running and waiting even after the last
+   chunk is processed, so that they can support the next input to be compressed
+   (more than one input file on the command line).  Once pigz is done, it will
+   call all the compress threads home (that'll do pig, that'll do).
+
+   Before starting to read the input, the main thread launches the write thread
+   so that it is ready pick up jobs immediately.  The compress thread puts the
+   write jobs in the list in sequence sorted order, so that the first job in
+   the list is always has the lowest sequence number.  The write thread waits
+   for the next write job in sequence, and then gets that job.  The job still
+   holds its input buffer, from which the write thread gets the input buffer
+   length for use in check value combination.  Then the write thread drops that
+   input buffer to allow its reuse.  Holding on to the input buffer until the
+   write thread starts also has the benefit that the read and compress threads
+   can't get way ahead of the write thread and build up a large backlog of
+   unwritten compressed data.  The write thread will write the compressed data,
+   drop the output buffer, and then wait for the check value to be unlocked
+   by the compress thread.  Then the write thread combines the check value for
+   this chunk with the total check value for eventual use in the trailer.  If
+   this is not the last chunk, the write thread then goes back to look for the
+   next output chunk in sequence.  After the last chunk, the write thread
+   returns and joins the main thread.  Unlike the compress threads, a new write
+   thread is launched for each input stream.  The write thread writes the
+   appropriate header and trailer around the compressed data.
+
+   The input and output buffers are reused through their collection in pools.
+   Each buffer has a use count, which when decremented to zero returns the
+   buffer to the respective pool.  Each input buffer has up to three parallel
+   uses: as the input for compression, as the data for the check value
+   calculation, and as a dictionary for compression.  Each output buffer has
+   only one use, which is as the output of compression followed serially as
+   data to be written.  The input pool is limited in the number of buffers, so
+   that reading does not get way ahead of compression and eat up memory with
+   more input than can be used.  The limit is approximately two times the
+   number of compression threads.  In the case that reading is fast as compared
+   to compression, that number allows a second set of buffers to be read while
+   the first set of compressions are being performed.  The number of output
+   buffers is not directly limited, but is indirectly limited by the release of
+   input buffers to the same number.
  */
 
 /* add a dash of portability */
 #ifdef __linux__
 #  define _LARGEFILE64_SOURCE
 #  define _FILE_OFFSET_BITS 64
-#endif
-#ifndef NOTHREAD
-#  define _POSIX_PTHREAD_SEMANTICS
-#  define _REENTRANT
 #endif
 
 /* included headers and what is expected from each */
@@ -144,20 +215,9 @@
 #include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), */
                         /* strcpy(), strncpy(), strlen(), strcat() */
 #include <errno.h>      /* errno, EEXIST */
+#include <assert.h>     /* assert() */
 #include <time.h>       /* ctime(), ctime_r(), time(), time_t, mktime() */
 #include <signal.h>     /* signal(), SIGINT */
-#ifndef NOTHREAD
-#include <pthread.h>    /* pthread_attr_destroy(), pthread_attr_init(), */
-                        /* pthread_attr_setdetachstate(),
-                           pthread_attr_setstacksize(), pthread_attr_t,
-                           pthread_cond_destroy(), pthread_cond_init(),
-                           pthread_cond_signal(), pthread_cond_wait(),
-                           pthread_create(), pthread_join(),
-                           pthread_mutex_destroy(), pthread_mutex_init(),
-                           pthread_mutex_lock(), pthread_mutex_t,
-                           pthread_mutex_unlock(), pthread_t,
-                           PTHREAD_CREATE_JOINABLE */
-#endif
 #include <sys/types.h>  /* ssize_t */
 #include <sys/stat.h>   /* chmod(), stat(), fstat(), lstat(), struct stat, */
                         /* S_IFDIR, S_IFLNK, S_IFMT, S_IFREG */
@@ -174,6 +234,12 @@
                            Z_DEFAULT_COMPRESSION, Z_DEFAULT_STRATEGY,
                            Z_DEFLATED, Z_NO_FLUSH, Z_NULL, Z_OK,
                            Z_SYNC_FLUSH, z_stream */
+#ifndef NOTHREAD
+#  include "yarn.h"     /* thread, launch(), join(), join_all(), */
+                        /* lock, new_lock(), possess(), twist(), wait_for(),
+                           release(), peek_lock(), free_lock(), yarn_name */
+   char *yarn_prefix = "pigz";      /* prefix for yarn error messages */
+#endif
 
 /* for local functions and globals */
 #define local static
@@ -195,110 +261,6 @@
         } \
     } while (0)
 
-#ifndef NOTHREAD
-
-/* combine two crc-32's or two adler-32's (copied from zlib 1.2.3) */
-
-local unsigned long gf2_matrix_times(unsigned long *mat, unsigned long vec)
-{
-    unsigned long sum;
-
-    sum = 0;
-    while (vec) {
-        if (vec & 1)
-            sum ^= *mat;
-        vec >>= 1;
-        mat++;
-    }
-    return sum;
-}
-
-local void gf2_matrix_square(unsigned long *square, unsigned long *mat)
-{
-    int n;
-
-    for (n = 0; n < 32; n++)
-        square[n] = gf2_matrix_times(mat, mat[n]);
-}
-
-local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
-                               size_t len2)
-{
-    int n;
-    unsigned long row;
-    unsigned long even[32];     /* even-power-of-two zeros operator */
-    unsigned long odd[32];      /* odd-power-of-two zeros operator */
-
-    /* degenerate case */
-    if (len2 == 0)
-        return crc1;
-
-    /* put operator for one zero bit in odd */
-    odd[0] = 0xedb88320UL;          /* CRC-32 polynomial */
-    row = 1;
-    for (n = 1; n < 32; n++) {
-        odd[n] = row;
-        row <<= 1;
-    }
-
-    /* put operator for two zero bits in even */
-    gf2_matrix_square(even, odd);
-
-    /* put operator for four zero bits in odd */
-    gf2_matrix_square(odd, even);
-
-    /* apply len2 zeros to crc1 (first square will put the operator for one
-       zero byte, eight zero bits, in even) */
-    do {
-        /* apply zeros operator for this bit of len2 */
-        gf2_matrix_square(even, odd);
-        if (len2 & 1)
-            crc1 = gf2_matrix_times(even, crc1);
-        len2 >>= 1;
-
-        /* if no more bits set, then done */
-        if (len2 == 0)
-            break;
-
-        /* another iteration of the loop with odd and even swapped */
-        gf2_matrix_square(odd, even);
-        if (len2 & 1)
-            crc1 = gf2_matrix_times(odd, crc1);
-        len2 >>= 1;
-
-        /* if no more bits set, then done */
-    } while (len2 != 0);
-
-    /* return combined crc */
-    crc1 ^= crc2;
-    return crc1;
-}
-
-#define BASE 65521U     /* largest prime smaller than 65536 */
-#define LOW16 0xffff    /* mask lower 16 bits */
-
-local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
-                                 size_t len2)
-{
-    unsigned long sum1;
-    unsigned long sum2;
-    unsigned rem;
-
-    /* the derivation of this formula is left as an exercise for the reader */
-    rem = (unsigned)(len2 % BASE);
-    sum1 = adler1 & LOW16;
-    sum2 = (rem * sum1) % BASE;
-    sum1 += (adler2 & LOW16) + BASE - 1;
-    sum2 += ((adler1 >> 16) & LOW16) + ((adler2 >> 16) & LOW16) + BASE - rem;
-    if (sum1 > BASE) sum1 -= BASE;
-    if (sum1 > BASE) sum1 -= BASE;
-    if (sum2 > (BASE << 1)) sum2 -= (BASE << 1);
-    if (sum2 > BASE) sum2 -= BASE;
-    return sum1 | (sum2 << 16);
-}
-
-#endif
-
 /* globals (modified by main thread only when it's the only thread) */
 local int ind;              /* input file descriptor */
 local int outd;             /* output file descriptor */
@@ -319,13 +281,10 @@ local int first = 1;        /* true if we need to print listing header */
 local int decode;           /* 0 to compress, 1 to decompress, 2 to test */
 local int level;            /* compression level */
 local int rsync;            /* true for rsync blocking */
-local int procs;            /* number of compression threads (>= 2) */
+local int procs;            /* maximum number of compression threads (>= 1) */
 local int dict;             /* true to initialize dictionary in each thread */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
 local struct timeval start; /* starting time of day for tracing */
-#ifndef NOTHREAD
-local pthread_attr_t attr;  /* thread creation attributes */
-#endif
 
 /* saved gzip/zip header data for decompression, testing, and listing */
 local time_t stamp;                 /* time stamp from gzip header */
@@ -334,14 +293,10 @@ local unsigned long zip_crc;        /* local header crc */
 local unsigned long zip_clen;       /* local header compressed length */
 local unsigned long zip_ulen;       /* local header uncompressed length */
 
-/* compute check value depeding on format */
-#define CHECK(a,b,c) (form == 1 ? adler32(a,b,c) : crc32(a,b,c))
-#define COMB(a,b,c) (form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
-
-/* exit with error, delete output file */
+/* exit with error, delete output file if in the middle of writing it */
 local int bail(char *why, char *what)
 {
-    if (out != NULL)
+    if (outd != -1 && out != NULL)
         unlink(out);
     if (verbosity > 0)
         fprintf(stderr, "pigz abort: %s%s\n", why, what);
@@ -352,18 +307,29 @@ local int bail(char *why, char *what)
 #ifdef DEBUG
 
 /* trace log */
-struct log {
+local struct log {
     struct timeval when;    /* time of entry */
     char *msg;              /* message */
     struct log *next;       /* next entry */
-} *log_head = NULL, **log_tail = &log_head;
-
+} *log_head, **log_tail = NULL;
 #ifndef NOTHREAD
-local pthread_mutex_t logex = PTHREAD_MUTEX_INITIALIZER;
+  local lock *log_lock = NULL;
 #endif
 
 /* maximum log entry length */
 #define MAXMSG 256
+
+/* set up log (call from main thread before other threads launched) */
+local void log_init(void)
+{
+    if (log_tail == NULL) {
+#ifndef NOTHREAD
+        log_lock = new_lock(0);
+#endif
+        log_head = NULL;
+        log_tail = &log_head;
+    }
+}
 
 /* add entry to trace log */
 local void log_add(char *fmt, ...)
@@ -389,13 +355,13 @@ local void log_add(char *fmt, ...)
     strcpy(me->msg, msg);
     me->next = NULL;
 #ifndef NOTHREAD
-    if (pthread_mutex_lock(&logex))
-        bail("mutex_lock error in ", "log_add");
+    assert(log_lock != NULL);
+    possess(log_lock);
 #endif
     *log_tail = me;
     log_tail = &(me->next);
 #ifndef NOTHREAD
-    pthread_mutex_unlock(&logex);
+    twist(log_lock, BY, +1);
 #endif
 }
 
@@ -405,21 +371,24 @@ local int log_show(void)
     struct log *me;
     struct timeval diff;
 
+    if (log_tail == NULL)
+        return 0;
 #ifndef NOTHREAD
-    if (pthread_mutex_lock(&logex))
-        bail("mutex_lock error in ", "log_show");
+    possess(log_lock);
 #endif
     me = log_head;
-    if (me != NULL) {
-        log_head = me->next;
-        if (me->next == NULL)
-            log_tail = &log_head;
-    }
+    if (me == NULL) {
 #ifndef NOTHREAD
-    pthread_mutex_unlock(&logex);
+        release(log_lock);
 #endif
-    if (me == NULL)
         return 0;
+    }
+    log_head = me->next;
+    if (me->next == NULL)
+        log_tail = &log_head;
+#ifndef NOTHREAD
+    twist(log_lock, BY, -1);
+#endif
     diff.tv_usec = me->when.tv_usec - start.tv_usec;
     diff.tv_sec = me->when.tv_sec - start.tv_sec;
     if (diff.tv_usec < 0) {
@@ -434,11 +403,37 @@ local int log_show(void)
     return 1;
 }
 
-/* show entries until no more */
+/* release log resources (need to do log_init() to use again) */
+local void log_free(void)
+{
+    struct log *me;
+
+    if (log_tail != NULL) {
+#ifndef NOTHREAD
+        possess(log_lock);
+#endif
+        while ((me = log_head) != NULL) {
+            log_head = me->next;
+            free(me->msg);
+            free(me);
+        }
+#ifndef NOTHREAD
+        twist(log_lock, TO, 0);
+        free_lock(log_lock);
+        log_lock = NULL;
+#endif
+        log_tail = NULL;
+    }
+}
+
+/* show entries until no more, free log */
 local void log_dump(void)
 {
+    if (log_tail == NULL)
+        return;
     while (log_show())
         ;
+    log_free();
 }
 
 /* debugging macro */
@@ -455,17 +450,6 @@ local void log_dump(void)
 #define Trace(x)
 
 #endif
-
-/* catch termination signal */
-local void cutshort(int sig)
-{
-    Trace(("termination by user"));
-    if (out != NULL)
-        unlink(out);
-    log_dump();
-    log_dump();
-    _exit(1);
-}
 
 /* read up to len bytes into buf, repeating read() calls as needed */
 local size_t readn(int desc, unsigned char *buf, size_t len)
@@ -495,162 +479,12 @@ local void writen(int desc, unsigned char *buf, size_t len)
     while (len) {
         ret = write(desc, buf, len);
         if (ret < 1)
+            fprintf(stderr, "write error code %d\n", errno);
+        if (ret < 1)
             bail("write error on ", out);
         buf += ret;
         len -= ret;
     }
-}
-
-#ifndef NOTHREAD
-
-/* a flag variable for communication between two threads */
-struct flag {
-    int value;              /* value of flag */
-    pthread_mutex_t lock;   /* lock for checking and changing flag */
-    pthread_cond_t cond;    /* condition for signaling on flag change */
-};
-
-/* initialize a flag for use, starting with value val */
-local void flag_init(struct flag *me, int val)
-{
-    me->value = val;
-    pthread_mutex_init(&(me->lock), NULL);
-    pthread_cond_init(&(me->cond), NULL);
-}
-
-/* set the flag to val, signal another process that may be waiting for it */
-local void flag_set(struct flag *me, int val)
-{
-    int ret;
-
-    ret = pthread_mutex_lock(&(me->lock));
-    if (ret)
-        bail("mutex_lock error in ", "flag_set");
-    me->value = val;
-    pthread_cond_signal(&(me->cond));
-    pthread_mutex_unlock(&(me->lock));
-}
-
-/* if it isn't already, wait for some other thread to set the flag to val */
-local void flag_wait(struct flag *me, int val)
-{
-    int ret;
-
-    ret = pthread_mutex_lock(&(me->lock));
-    if (ret)
-        bail("mutex_lock error in ", "flag_wait");
-    while (me->value != val)
-        pthread_cond_wait(&(me->cond), &(me->lock));
-    pthread_mutex_unlock(&(me->lock));
-}
-
-/* if flag is equal to val, wait for some other thread to change it */
-local void flag_wait_not(struct flag *me, int val)
-{
-    int ret;
-
-    ret = pthread_mutex_lock(&(me->lock));
-    if (ret)
-        bail("mutex_lock error in ", "flag_wait_not");
-    while (me->value == val)
-        pthread_cond_wait(&(me->cond), &(me->lock));
-    pthread_mutex_unlock(&(me->lock));
-}
-
-/* clean up the flag when done with it */
-local void flag_done(struct flag *me)
-{
-    pthread_cond_destroy(&(me->cond));
-    pthread_mutex_destroy(&(me->lock));
-}
-
-/* busy flag values */
-#define IDLE 0          /* compress and writing done -- can start compress */
-#define COMP 1          /* compress -- input and output buffers in use */
-#define WRITE 2         /* compress done, writing output -- can read input */
-
-/* next and previous jobs[] indices */
-#define NEXT(n) ((n) == procs - 1 ? 0 : (n) + 1)
-#define PREV(n) ((n) == 0 ? procs - 1 : (n) - 1)
-
-#endif
-
-/* work units to feed to compress_thread() -- it is assumed that the out
-   buffer is large enough to hold the maximum size len bytes could deflate to,
-   plus five bytes for the final sync marker */
-local struct work {
-    size_t len;                 /* length of input */
-    unsigned long check;        /* check value of input */
-    unsigned char *buf;         /* input */
-    unsigned char *out;         /* space for output (guaranteed big enough) */
-    z_stream strm;              /* pre-initialized z_stream */
-#ifndef NOTHREAD
-    struct flag busy;           /* busy flag indicating work unit in use */
-    pthread_t comp;             /* this compression thread */
-#endif
-} *jobs = NULL;
-
-/* set up the jobs[] work units -- full initialization of each unit is
-   deferred until the unit is actually needed, also make sure that
-   size arithmetic does not overflow for here or for job_init() */
-local void jobs_new(void)
-{
-    int n;
-
-    if (jobs != NULL)
-        return;
-    if (size + (size >> 11) + 10 < (size >> 11) + 10 ||
-        (ssize_t)(size + (size >> 11) + 10) < 0 ||
-        ((size_t)0 - 1) / procs <= sizeof(struct work) ||
-        (jobs = malloc(procs * sizeof(struct work))) == NULL)
-        bail("not enough memory", "");
-    for (n = 0; n < procs; n++) {
-        jobs[n].buf = NULL;
-#ifndef NOTHREAD
-        flag_init(&(jobs[n].busy), IDLE);
-#endif
-    }
-}
-
-/* one-time initialization of a work unit -- this is where we set the deflate
-   compression level and request raw deflate, and also where we set the size
-   of the output buffer to guarantee enough space for a worst-case deflate
-   ending with a Z_SYNC_FLUSH */
-local void job_init(struct work *job)
-{
-    int ret;                        /* deflateInit2() return value */
-
-    Trace(("-- initializing %d", job - jobs));
-    job->buf = malloc(size);
-    job->out = malloc(size + (size >> 11) + 10);
-    job->strm.zfree = Z_NULL;
-    job->strm.zalloc = Z_NULL;
-    job->strm.opaque = Z_NULL;
-    ret = deflateInit2(&(job->strm), level, Z_DEFLATED, -15, 8,
-                       Z_DEFAULT_STRATEGY);
-    if (job->buf == NULL || job->out == NULL || ret != Z_OK)
-        bail("not enough memory", "");
-}
-
-/* release resources used by the job[] work units */
-local void jobs_free(void)
-{
-    int n;
-
-    if (jobs == NULL)
-        return;
-    for (n = procs - 1; n >= 0; n--) {
-        if (jobs[n].buf != NULL) {
-            (void)deflateEnd(&(jobs[n].strm));
-            free(jobs[n].out);
-            free(jobs[n].buf);
-        }
-#ifndef NOTHREAD
-        flag_done(&(jobs[n].busy));
-#endif
-    }
-    free(jobs);
-    jobs = NULL;
 }
 
 /* sliding dictionary size for deflate */
@@ -821,227 +655,696 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
     }
 }
 
+/* compute check value depeding on format */
+#define CHECK(a,b,c) (form == 1 ? adler32(a,b,c) : crc32(a,b,c))
+
 #ifndef NOTHREAD
 
-/* compress thread: compress the input in the provided work unit and compute
-   check -- assume that the amount of space at job->out is guaranteed to be
-   enough for the compressed output, as determined by the maximum expansion
-   of deflate compression -- use the input in the previous work unit (if there
-   is one) to set the deflate dictionary for better compression */
-local void *compress_thread(void *arg)
+/* -- threaded portions of pigz -- */
+
+#define COMB(a,b,c) (form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
+
+/* -- check value combination routines for parallel calculation -- */
+
+/* combine two crc-32's or two adler-32's (copied from zlib 1.2.3 so that pigz
+   can be compatible with older versions of zlib) */
+
+local unsigned long gf2_matrix_times(unsigned long *mat, unsigned long vec)
 {
-    size_t len;                     /* input length for this work unit */
-    unsigned long check;            /* check of input data */
-    struct work *prev;              /* previous work unit */
-    struct work *job = arg;         /* work unit for this thread */
-    z_stream *strm = &(job->strm);  /* zlib stream for this work unit */
+    unsigned long sum;
 
-    /* reset state for a new compressed stream */
-    Trace(("-- compressing %d", job - jobs));
-    (void)deflateReset(strm);
-
-    /* initialize input, output, and check */
-    strm->next_in = job->buf;
-    strm->next_out = job->out;
-    len = job->len;
-    check = CHECK(0L, Z_NULL, 0);
-
-    /* set dictionary if this isn't the first work unit, and if we will be
-       compressing something (the read thread assures that the dictionary
-       data in the previous work unit is still there) */
-    prev = jobs + PREV(job - jobs);
-    if (dict && prev->buf != NULL && len != 0)
-        deflateSetDictionary(strm, prev->buf + (size - DICT), DICT);
-
-    /* run MAX-sized amounts of input through deflate and check -- this loop
-       is needed for those cases where the integer type is smaller than the
-       size_t type, or when len is close to the limit of the size_t type */
-    while (len > MAX) {
-        strm->avail_in = MAX;
-        strm->avail_out = (unsigned)-1;
-        check = CHECK(check, strm->next_in, strm->avail_in);
-        (void)deflate(strm, Z_NO_FLUSH);
-        len -= MAX;
+    sum = 0;
+    while (vec) {
+        if (vec & 1)
+            sum ^= *mat;
+        vec >>= 1;
+        mat++;
     }
-
-    /* run last piece through deflate and check -- terminate with sync marker,
-       or finish deflate stream if this is the last block */
-    strm->avail_in = len;
-    strm->avail_out = (unsigned)-1;
-    check = CHECK(check, strm->next_in, strm->avail_in);
-    (void)deflate(strm, job->len < size ? Z_FINISH : Z_SYNC_FLUSH);
-
-    /* return result */
-    job->check = check;
-    Trace(("-- compressed %d", job - jobs));
-    return NULL;
+    return sum;
 }
 
-/* write thread: wait for compression threads to complete, write output in
-   order, also write gzip header and trailer around the compressed data */
-local void *write_thread(void *arg)
+local void gf2_matrix_square(unsigned long *square, unsigned long *mat)
 {
-    int n;                          /* compress thread index */
-    size_t len;                     /* length of input processed */
+    int n;
+
+    for (n = 0; n < 32; n++)
+        square[n] = gf2_matrix_times(mat, mat[n]);
+}
+
+local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
+                               size_t len2)
+{
+    int n;
+    unsigned long row;
+    unsigned long even[32];     /* even-power-of-two zeros operator */
+    unsigned long odd[32];      /* odd-power-of-two zeros operator */
+
+    /* degenerate case */
+    if (len2 == 0)
+        return crc1;
+
+    /* put operator for one zero bit in odd */
+    odd[0] = 0xedb88320UL;          /* CRC-32 polynomial */
+    row = 1;
+    for (n = 1; n < 32; n++) {
+        odd[n] = row;
+        row <<= 1;
+    }
+
+    /* put operator for two zero bits in even */
+    gf2_matrix_square(even, odd);
+
+    /* put operator for four zero bits in odd */
+    gf2_matrix_square(odd, even);
+
+    /* apply len2 zeros to crc1 (first square will put the operator for one
+       zero byte, eight zero bits, in even) */
+    do {
+        /* apply zeros operator for this bit of len2 */
+        gf2_matrix_square(even, odd);
+        if (len2 & 1)
+            crc1 = gf2_matrix_times(even, crc1);
+        len2 >>= 1;
+
+        /* if no more bits set, then done */
+        if (len2 == 0)
+            break;
+
+        /* another iteration of the loop with odd and even swapped */
+        gf2_matrix_square(odd, even);
+        if (len2 & 1)
+            crc1 = gf2_matrix_times(odd, crc1);
+        len2 >>= 1;
+
+        /* if no more bits set, then done */
+    } while (len2 != 0);
+
+    /* return combined crc */
+    crc1 ^= crc2;
+    return crc1;
+}
+
+#define BASE 65521U     /* largest prime smaller than 65536 */
+#define LOW16 0xffff    /* mask lower 16 bits */
+
+local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
+                                 size_t len2)
+{
+    unsigned long sum1;
+    unsigned long sum2;
+    unsigned rem;
+
+    /* the derivation of this formula is left as an exercise for the reader */
+    rem = (unsigned)(len2 % BASE);
+    sum1 = adler1 & LOW16;
+    sum2 = (rem * sum1) % BASE;
+    sum1 += (adler2 & LOW16) + BASE - 1;
+    sum2 += ((adler1 >> 16) & LOW16) + ((adler2 >> 16) & LOW16) + BASE - rem;
+    if (sum1 > BASE) sum1 -= BASE;
+    if (sum1 > BASE) sum1 -= BASE;
+    if (sum2 > (BASE << 1)) sum2 -= (BASE << 1);
+    if (sum2 > BASE) sum2 -= BASE;
+    return sum1 | (sum2 << 16);
+}
+
+/* -- pool of spaces for buffer management -- */
+
+/* These routines manage a pool of spaces.  Each pool specifies a fixed size
+   buffer to be contained in each space.  Each space has a use count, which
+   when decremented to zero returns the space to the pool.  If a space is
+   requested from the pool and the pool is empty, a space is immediately
+   created unless a specified limit on the number of spaces has been reached.
+   Only if the limit is reached will it wait for a space to be returned to the
+   pool.  Each space knows what pool it belongs to, so that it can be returned.
+ */
+
+/* a space (one buffer for each space) */
+struct space {
+    lock *use;              /* use count -- return to pool when zero */
+    void *buf;              /* buffer of size pool->size */
+    size_t len;             /* for application usage */
+    struct pool *pool;      /* pool to return to */
+    struct space *next;     /* for pool linked list */
+};
+
+/* pool of spaces (one pool for each size needed) */
+struct pool {
+    lock *have;             /* unused spaces available, lock for list */
+    struct space *head;     /* linked list of available buffers */
+    size_t size;            /* size of all buffers in this pool */
+    int limit;              /* number of new spaces allowed, or -1 */
+    int made;               /* number of buffers made */
+};
+
+/* initialize a pool (pool structure itself provided, not allocated) -- the
+   limit is the maximum number of spaces in the pool, or -1 to indicate no
+   limit, i.e., to never wait for a buffer to return to the pool */
+local void new_pool(struct pool *pool, size_t size, int limit)
+{
+    pool->have = new_lock(0);
+    pool->head = NULL;
+    pool->size = size;
+    pool->limit = limit;
+    pool->made = 0;
+}
+
+/* get a space from a pool -- the use count is initially set to one, so there
+   is no need to call use_space() for the first use */
+local struct space *get_space(struct pool *pool)
+{
+    struct space *space;
+
+    /* if can't create any more, wait for a space to show up */
+    possess(pool->have);
+    if (pool->limit == 0)
+        wait_for(pool->have, NOT_TO_BE, 0);
+
+    /* if a space is available, pull it from the list and return it */
+    if (pool->head != NULL) {
+        space = pool->head;
+        possess(space->use);
+        pool->head = space->next;
+        twist(pool->have, BY, -1);      /* one less in pool */
+        twist(space->use, TO, 1);       /* initially one user */
+        return space;
+    }
+
+    /* nothing available, don't want to wait, make a new space */
+    assert(pool->limit != 0);
+    if (pool->limit > 0)
+        pool->limit--;
+    pool->made++;
+    release(pool->have);
+    space = malloc(sizeof(struct space));
+    if (space == NULL)
+        bail("not enough memory", "");
+    space->use = new_lock(1);           /* initially one user */
+    space->buf = malloc(pool->size);
+    if (space->buf == NULL)
+        bail("not enough memory", "");
+    space->pool = pool;                 /* remember the pool this belongs to */
+    return space;
+}
+
+/* increment the use count to require one more drop before returning this space
+   to the pool */
+local void use_space(struct space *space)
+{
+    possess(space->use);
+    twist(space->use, BY, +1);
+}
+
+/* drop a space, returning it to the pool if the use count is zero */
+local void drop_space(struct space *space)
+{
+    int use;
+    struct pool *pool;
+
+    possess(space->use);
+    use = peek_lock(space->use);
+    assert(use != 0);
+    if (use == 1) {
+        pool = space->pool;
+        possess(pool->have);
+        space->next = pool->head;
+        pool->head = space;
+        twist(pool->have, BY, +1);
+    }
+    twist(space->use, BY, -1);
+}
+
+/* free the memory and lock resources of a pool -- return number of spaces for
+   debugging and resource usage measurement */
+local int free_pool(struct pool *pool)
+{
+    int count;
+    struct space *space;
+
+    possess(pool->have);
+    count = 0;
+    while ((space = pool->head) != NULL) {
+        pool->head = space->next;
+        free(space->buf);
+        free_lock(space->use);
+        free(space);
+        count++;
+    }
+    release(pool->have);
+    free_lock(pool->have);
+    assert(count == pool->made);
+    return count;
+}
+
+/* input and output buffer pools */
+local struct pool in_pool;
+local struct pool out_pool;
+
+/* -- parallel compression -- */
+
+/* compress or write job (passed from compress list to write list) -- if seq is
+   equal to -1, compress_thread is instructed to return; if more is false then
+   this is the last chunk, which after writing tells write_thread to return */
+struct job {
+    long seq;                   /* sequence number */
+    int more;                   /* true if this is not the last chunk */
+    struct space *in;           /* input data to compress */
+    struct space *out;          /* dictionary or resulting compressed data */
+    unsigned long check;        /* check value for input data */
+    lock *calc;                 /* released when check calculation complete */
+    struct job *next;           /* next job in the list (either list) */
+};
+
+/* list of compress jobs (with tail for appending to list) */
+local lock *compress_have = NULL;   /* number of compress jobs waiting */
+local struct job *compress_head, **compress_tail;
+
+/* list of write jobs */
+local lock *write_first;            /* lowest sequence number in list */
+local struct job *write_head;
+
+/* number of compression threads running */
+local int cthreads = 0;
+
+/* write thread if running */
+local thread *writeth = NULL;
+
+/* setup job lists (call from main thread) */
+local void setup_jobs(void)
+{
+    /* set up only if not already set up*/
+    if (compress_have != NULL)
+        return;
+
+    /* allocate locks and initialize lists */
+    compress_have = new_lock(0);
+    compress_head = NULL;
+    compress_tail = &compress_head;
+    write_first = new_lock(-1);
+    write_head = NULL;
+
+    /* initialize buffer pools */
+    new_pool(&in_pool, size, (procs << 1) + 2);
+    new_pool(&out_pool, size + (size >> 11) + 10, -1);
+}
+
+/* command the compress threads to all return, then join them all (call from
+   main thread), free all the thread-related resources */
+local void finish_jobs(void)
+{
+    struct job job;
+    int caught;
+
+    /* only do this once */
+    if (compress_have == NULL)
+        return;
+
+    /* command all of the extant compress threads to return */
+    possess(compress_have);
+    job.seq = -1;
+    job.next = NULL;
+    compress_head = &job;
+    compress_tail = &(job.next);
+    twist(compress_have, BY, +1);       /* will wake them all up */
+
+    /* join all of the compress threads, verify they all came back */
+    caught = join_all();
+    Trace(("-- joined %d compress threads", caught));
+    assert(caught == cthreads);
+    cthreads = 0;
+
+    /* free the resources */
+    caught = free_pool(&out_pool);
+    Trace(("-- freed %d output buffers", caught));
+    caught = free_pool(&in_pool);
+    Trace(("-- freed %d input buffers", caught));
+    free_lock(write_first);
+    free_lock(compress_have);
+    compress_have = NULL;
+}
+
+/* get the next compression job from the head of the list, compress and compute
+   the check value on the input, and put a job in the write list with the
+   results -- keep looking for more jobs, returning when a job is found with a
+   sequence number of -1 (leave that job in the list for other incarnations to
+   find) */
+local void compress_thread(void *dummy)
+{
+    struct job *job;                /* job pulled and working on */ 
+    struct job *here, **prior;      /* pointers for inserting in write list */ 
+    unsigned long check;            /* check value of input */
+    unsigned char *next;            /* pointer for check value data */
+    size_t len;                     /* remaining bytes to compress/check */
+    z_stream strm;                  /* deflate stream */
+
+    /* initialize the deflate stream for this thread */
+    strm.zfree = Z_NULL;
+    strm.zalloc = Z_NULL;
+    strm.opaque = Z_NULL;
+    if (deflateInit2(&strm, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) !=
+            Z_OK)
+        bail("not enough memory", "");
+
+    /* keep looking for work */
+    for (;;) {
+        /* get a job (like I tell my son) */
+        possess(compress_have);
+        wait_for(compress_have, NOT_TO_BE, 0);
+        job = compress_head;
+        assert(job != NULL);
+        if (job->seq == -1)
+            break;
+        compress_head = job->next;
+        if (job->next == NULL)
+            compress_tail = &compress_head;
+        twist(compress_have, BY, -1);
+
+        /* got a job -- initialize and set the compression level (note that if
+           deflateParams() is called immediately after deflateReset(), there is
+           no need to initialize the input/output for the stream) */
+        Trace(("-- compressing %ld", job->seq));
+        (void)deflateReset(&strm);
+        (void)deflateParams(&strm, level, Z_DEFAULT_STRATEGY);
+
+        /* set dictionary if provided, release that input buffer (only provided
+           if dict is true and if this is not the first work unit) -- the
+           amount of data in the buffer is assured to be >= DICT */
+        if (job->out != NULL) {
+            len = job->out->len;
+            deflateSetDictionary(&strm,
+                (unsigned char *)(job->out->buf) + (len - DICT), DICT);
+            drop_space(job->out);
+        }
+
+        /* set up input and output (the output size is assured to be big enough
+           for the worst case expansion of the input buffer size, plus five
+           bytes for the terminating stored block) */
+        job->out = get_space(&out_pool);
+        strm.next_in = job->in->buf;
+        strm.next_out = job->out->buf;
+
+        /* run MAX-sized amounts of input through deflate -- this loop is
+           needed for those cases where the integer type is smaller than the
+           size_t type, or when len is close to the limit of the size_t type */
+        len = job->in->len;
+        while (len > MAX) {
+            strm.avail_in = MAX;
+            strm.avail_out = (unsigned)-1;
+            (void)deflate(&strm, Z_NO_FLUSH);
+            assert(strm.avail_in == 0 && strm.avail_out != 0);
+            len -= MAX;
+        }
+
+        /* run the last piece through deflate -- terminate with a sync marker,
+           or finish deflate stream if this is the last block */
+        strm.avail_in = (unsigned)len;
+        strm.avail_out = (unsigned)-1;
+        (void)deflate(&strm, job->more ? Z_SYNC_FLUSH :  Z_FINISH);
+        assert(strm.avail_in == 0 && strm.avail_out != 0);
+        job->out->len = strm.next_out - (unsigned char *)(job->out->buf);
+        Trace(("-- compressed %ld%s", job->seq, job->more ? "" : " (last)"));
+
+        /* lock check value and reserve the input buffer until check value has
+           been calculated */
+        use_space(job->in);
+        possess(job->calc);
+
+        /* insert write job in list in sorted order, alert write thread */
+        possess(write_first);
+        prior = &write_head;
+        while ((here = *prior) != NULL) {
+            if (here->seq > job->seq)
+                break;
+            prior = &(here->next);
+        }
+        job->next = here;
+        *prior = job;
+        twist(write_first, TO, write_head->seq);
+
+        /* calculate the check value in parallel with writing, unlock the check
+           value so the write thread can use it, and drop this usage of the
+           input buffer */
+        len = job->in->len;
+        next = job->in->buf;
+        check = CHECK(0L, Z_NULL, 0);
+        while (len > MAX) {
+            check = CHECK(check, next, MAX);
+            len -= MAX;
+            next += MAX;
+        }
+        check = CHECK(check, next, (unsigned)len);
+        drop_space(job->in);
+        job->check = check;
+        release(job->calc);
+        Trace(("-- checked %ld%s", job->seq, job->more ? "" : " (last)"));
+
+        /* done with that one -- go find another job */
+    }
+
+    /* found job with seq == -1 -- free deflate memory and return to join */
+    release(compress_have);
+    deflateEnd(&strm);
+}
+
+/* collect the write jobs off of the list in sequence order and write out the
+   compressed data until the last chunk is written -- also write the header and
+   trailer and combine the individual check values of the input buffers */
+local void write_thread(void *dummy)
+{
+    long seq;                       /* next sequence number looking for */
+    struct job *job;                /* job pulled and working on */
+    size_t len;                     /* input length */
+    int more;                       /* true if more chunks to write */
     unsigned long head;             /* header length */
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
 
-    /* build and write gzip header */
+    /* build and write header */
     Trace(("-- write thread running"));
     head = put_header();
 
     /* process output of compress threads until end of input */    
     ulen = clen = 0;
     check = CHECK(0L, Z_NULL, 0);
-    n = 0;
+    seq = 0;
     do {
-        /* wait for compress thread to start, then wait to complete */
-        flag_wait(&(jobs[n].busy), COMP);
-        pthread_join(jobs[n].comp, NULL);
+        /* get next write job in order */
+        possess(write_first);
+        wait_for(write_first, TO_BE, seq);
+        job = write_head;
+        write_head = job->next;
+        twist(write_first, TO, write_head == NULL ? -1 : write_head->seq);
 
-        /* now that compress is done, allow read thread to use input buffer */
-        flag_set(&(jobs[n].busy), WRITE);
+        /* update lengths, save uncompressed length for COMB */
+        more = job->more;
+        len = job->in->len;
+        drop_space(job->in);
+        ulen += (unsigned long)len;
+        clen += (unsigned long)(job->out->len);
 
-        /* write compressed data and update length and check value */
-        Trace(("-- writing %d", n));
-        writen(outd, jobs[n].out, jobs[n].strm.next_out - jobs[n].out);
-        len = jobs[n].len;
-        ulen += len;
-        clen += jobs[n].strm.next_out - jobs[n].out;
-        Trace(("-- wrote %d", n));
-        check = COMB(check, jobs[n].check, len);
+        /* write the compressed data and drop the output buffer */
+        Trace(("-- writing %ld", seq));
+        writen(outd, job->out->buf, job->out->len);
+        drop_space(job->out);
+        Trace(("-- wrote %ld%s", seq, more ? "" : " (last)"));
 
-        /* release this work unit and go to the next work unit */
-        Trace(("-- releasing %d", n));
-        flag_set(&(jobs[n].busy), IDLE);
-        n = NEXT(n);
-        if (n == 0 && verbosity > 1) {
-            putc('.', stderr);
-            fflush(stderr);
-        }
+        /* wait for check calculation to complete, then combine, once
+           the compress thread is done with the input, release it */
+        possess(job->calc);
+        check = COMB(check, job->check, len);
+        release(job->calc);
 
-        /* an input buffer less than size in length indicates end of input */
-    } while (len == size);
+        /* free the job */
+        free_lock(job->calc);
+        free(job);
+
+        /* get the next buffer in sequence */
+        seq++;
+    } while (more);
 
     /* write trailer */
     put_trailer(ulen, clen, check, head);
-    return NULL;
+
+    /* verify no more jobs, prepare for next use */
+    possess(compress_have);
+    assert(compress_head == NULL && peek_lock(compress_have) == 0);
+    release(compress_have);
+    possess(write_first);
+    assert(write_head == NULL);
+    twist(write_first, TO, -1);
 }
 
-/* compress ind to outd in the gzip format, using multiple threads for the
-   compression and checj calculation and another thread for writing the output,
-   the read thread is the main thread */
-local void read_thread(void)
+/* compress ind to outd, using multiple threads for the compression and check
+   value calculations and one other thread for writing the output -- compress
+   threads will be launched and left running (waiting actually) to support
+   subsequent calls of parallel_compress() */
+local void parallel_compress(void)
 {
-    int n;                          /* general index */
-    size_t got;                     /* amount read */
-    pthread_t write;                /* write thread */
+    long seq;                       /* sequence number */
+    struct space *prev;             /* previous input space */
+    struct space *next;             /* next input space */
+    struct job *job;                /* job for compress, then write */
+    int more;                       /* true if more input to read */
 
-    /* allocate new or clean up existing work units */
-    jobs_new();
+    /* if first time or after an option change, setup the job lists */
+    setup_jobs();
 
     /* start write thread */
-    pthread_create(&write, &attr, write_thread, NULL);
+    writeth = launch(write_thread, NULL);
 
     /* read from input and start compress threads (write thread will pick up
        the output of the compress threads) */
-    n = 0;
+    seq = 0;
+    prev = NULL;
+    next = get_space(&in_pool);
+    next->len = readn(ind, next->buf, next->pool->size);
     do {
-        /* initialize this work unit if it's the first time it's used */
-        if (jobs[n].buf == NULL)
-            job_init(jobs + n);
+        /* create a new job, use next input chunk, previous as dictionary */
+        job = malloc(sizeof(struct job));
+        if (job == NULL)
+            bail("not enough memory", "");
+        job->seq = seq;
+        job->in = next;
+        job->out = dict ? prev : NULL;  /* dictionary for compression */
+        job->calc = new_lock(0);
 
-        /* read input data, but wait for last compress on this work unit to be
-           done, and wait for the dictionary to be used by the last compress on
-           the next work unit */
-        flag_wait_not(&(jobs[n].busy), COMP);
-        flag_wait_not(&(jobs[NEXT(n)].busy), COMP);
-        got = readn(ind, jobs[n].buf, size);
-        Trace(("-- have read %d", n));
+        /* check for end of file, reading next chunk if not sure */
+        if (next->len < next->pool->size)
+            more = 0;
+        else {
+            next = get_space(&in_pool);
+            next->len = readn(ind, next->buf, next->pool->size);
+            more = next->len != 0;
+            if (dict && more) {
+                use_space(job->in);     /* hold as dictionary for next loop */
+                prev = job->in;
+            }
+        }
+        job->more = more;
+        Trace(("-- read %ld%s", seq, more ? "" : " (last)"));
+        if (++seq < 1)
+            bail("input too long: ", in);
 
-        /* start compress thread, but wait for write to be done first */
-        flag_wait(&(jobs[n].busy), IDLE);
-        jobs[n].len = got;
-        pthread_create(&(jobs[n].comp), &attr, compress_thread, jobs + n);
+        /* start another compress thread if needed */
+        if (cthreads < seq && cthreads < procs) {
+            (void)launch(compress_thread, NULL);
+            cthreads++;
+        }
 
-        /* mark work unit so write thread knows compress was started */
-        flag_set(&(jobs[n].busy), COMP);
+        /* put job at end of compress list, let all the compressors know */
+        possess(compress_have);
+        job->next = NULL;
+        *compress_tail = job;
+        compress_tail = &(job->next);
+        twist(compress_have, BY, +1);
 
-        /* go to the next work unit */
-        n = NEXT(n);
+        /* do until end of input */
+    } while (more);
 
-        /* do until end of input, indicated by a read less than size */
-    } while (got == size);
-
-    /* wait for the write thread to complete -- the write thread will join with
-       all of the compress threads, so this waits for all of the threads to
-       complete */
-    pthread_join(write, NULL);
-    Trace(("-- all threads joined"));
+    /* wait for the write thread to complete (we leave the compress threads out
+       there and waiting in case there is another stream to compress) */
+    join(writeth);
+    writeth = NULL;
+    Trace(("-- write thread joined"));
 }
 
 #endif
 
-/* do a simple gzip in a single thread from ind to outd */
-local void single_gzip(void)
+/* do a simple compression in a single thread from ind to outd -- if reset is
+   true, instead free the memory that was allocated and retained for input,
+   output, and deflate */
+local void single_compress(int reset)
 {
     size_t got;                     /* amount read */
+    size_t more;                    /* amount of next read (0 if eof) */
     unsigned long head;             /* header length */
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
-    z_stream *strm;                 /* convenient pointer */
+    static unsigned out_size;       /* size of output buffer */
+    static unsigned char *in, *next, *out;  /* reused i/o buffers */
+    static z_stream *strm = NULL;   /* reused deflate structure */
 
-    /* write gzip header */
+    /* if requested, just release the allocations and return */
+    if (reset) {
+        if (strm != NULL) {
+            deflateEnd(strm);
+            free(strm);
+            free(out);
+            free(next);
+            free(in);
+            strm = NULL;
+        }
+        return;
+    }
+
+    /* initialize the deflate structure if this is the first time */
+    if (strm == NULL) {
+        out_size = size > MAX ? MAX : (unsigned)size;
+        if ((in = malloc(size)) == NULL ||
+            (next = malloc(size)) == NULL ||
+            (out = malloc(out_size)) == NULL ||
+            (strm = malloc(sizeof(z_stream))) == NULL)
+            bail("not enough memory", "");
+        strm->zfree = Z_NULL;
+        strm->zalloc = Z_NULL;
+        strm->opaque = Z_NULL;
+        if (deflateInit2(strm, level, Z_DEFLATED, -15, 8,
+                         Z_DEFAULT_STRATEGY) != Z_OK)
+            bail("not enough memory", "");
+    }
+
+    /* write header */
     head = put_header();
 
-    /* if first time, initialize buffers and deflate */
-    jobs_new();
-    if (jobs->buf == NULL)
-        job_init(jobs);
+    /* set compression level in case it changed */
+    (void)deflateReset(strm);
+    (void)deflateParams(strm, level, Z_DEFAULT_STRATEGY);
 
     /* do raw deflate and calculate check value */
-    strm = &(jobs->strm);
-    (void)deflateReset(strm);
     ulen = clen = 0;
     check = CHECK(0L, Z_NULL, 0);
+    more = readn(ind, next, size);
     do {
-        /* read some data to compress */
-        got = readn(ind, jobs->buf, size);
+        /* get data to compress, see if there is any more input */
+        got = more;
+        { unsigned char *temp; temp = in; in = next; next = temp; }
+        more = got < size ? 0 : readn(ind, next, size);
         ulen += (unsigned long)got;
-        strm->next_in = jobs->buf;
+        strm->next_in = in;
 
         /* compress MAX-size chunks in case unsigned type is small */
         while (got > MAX) {
             strm->avail_in = MAX;
             check = CHECK(check, strm->next_in, strm->avail_in);
             do {
-                strm->avail_out = size;
-                strm->next_out = jobs->out;
+                strm->avail_out = out_size;
+                strm->next_out = out;
                 (void)deflate(strm, Z_NO_FLUSH);
-                writen(outd, jobs->out, size - strm->avail_out);
-                clen += size - strm->avail_out;
+                writen(outd, out, out_size - strm->avail_out);
+                clen += out_size - strm->avail_out;
             } while (strm->avail_out == 0);
+            assert(strm->avail_in == 0);
             got -= MAX;
         }
 
-        /* compress the remainder, finishing if end of input */
-        if (got)
-            check = CHECK(check, strm->next_in, got);
-        strm->avail_in = got;
+        /* compress the remainder, finishing if end of input -- when not -i,
+           use a Z_SYNC_FLUSH so that this and parallel compression produce the
+           same output */
+        strm->avail_in = (unsigned)got;
+        check = CHECK(check, strm->next_in, strm->avail_in);
         do {
-            strm->avail_out = size;
-            strm->next_out = jobs->out;
-            (void)deflate(strm, got < size ? Z_FINISH :
-                            (dict ? Z_NO_FLUSH : Z_FULL_FLUSH));
-            writen(outd, jobs->out, size - strm->avail_out);
-            clen += size - strm->avail_out;
+            strm->avail_out = out_size;
+            strm->next_out = out;
+            (void)deflate(strm,
+                more ? (dict ? Z_SYNC_FLUSH : Z_FULL_FLUSH) : Z_FINISH);
+            writen(outd, out, out_size - strm->avail_out);
+            clen += out_size - strm->avail_out;
         } while (strm->avail_out == 0);
+        assert(strm->avail_in == 0);
 
-        /* do until read doesn't fill buffer */
-    } while (got == size);
+        /* do until no more input */
+    } while (more);
 
     /* write trailer */
     put_trailer(ulen, clen, check, head);
@@ -1342,7 +1645,8 @@ local size_t compressed_suffix(char *nm)
 #define NAMEMAX1 48     /* name display limit at vebosity 1 */
 #define NAMEMAX2 16     /* name display limit at vebosity 2 */
 
-/* print gzip or lzw file information */
+/* print gzip or lzw file information -- this code assumes that off_t is a
+   long long type, and that the "ll" printf length modifier is available */
 local void show_info(int method, unsigned long check, off_t len, int cont)
 {
     int max;                /* maximum name length for current verbosity */
@@ -1568,33 +1872,33 @@ struct do_check {
 };
 
 /* check value computation thread */
-local void *run_check(void *arg)
+local void run_check(void *arg)
 {
     struct do_check *work = arg;
 
     work->check = CHECK(work->check, work->buf, work->len);
-    return NULL;
+    return;
 }
 
 /* call-back output function for inflateBack() */
 local int outb(void *desc, unsigned char *buf, unsigned len)
 {
     struct do_check work;
-    pthread_t check;
+    thread *check = NULL;
 
     out_tot += len;
     if (procs > 1) {
         work.check = out_check;
         work.buf = buf;
         work.len = len;
-        pthread_create(&check, &attr, run_check, &work);
+        check = launch(run_check, &work);
     }
     else
         out_check = CHECK(out_check, buf, len);
     if (decode == 1)
         writen(outd, buf, len);
     if (procs > 1) {
-        pthread_join(check, NULL);
+        join(check);
         out_check = work.check;
     }
     return 0;
@@ -2227,10 +2531,10 @@ local void process(char *path)
     }
 #ifndef NOTHREAD
     else if (procs > 1)
-        read_thread();
+        parallel_compress();
 #endif
     else
-        single_gzip();
+        single_compress(0);
     if (verbosity > 1) {
         putc('\n', stderr);
         fflush(stderr);
@@ -2242,6 +2546,7 @@ local void process(char *path)
     if (outd != 1) {
         if (close(outd))
             bail("write error on ", out);
+        outd = -1;              /* now prevent deletion on interrupt */
         if (ind != 0) {
             copymeta(in, out);
             if (!keep)
@@ -2267,7 +2572,7 @@ local char *helptext[] = {
 "  -0 to -9, --fast, --best   Compression levels, --fast is -1, --best is -9",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 #ifndef NOTHREAD
-"  -p, --processes n    Allow up to n compression threads (default 32)",
+"  -p, --processes n    Allow up to n compression threads (default 8)",
 #endif
 "  -i, --independent    Compress blocks independently for damage recovery",
 "  -R, --rsyncable      Input-determined block locations for rsync",
@@ -2308,16 +2613,11 @@ local void help(void)
 /* set option defaults */
 local void defaults(void)
 {
-    /* 32 processes and 128K buffers were found to provide good utilization of
-       four cores (about 97%) and balanced the overall execution time impact of
-       more threads against more dictionary processing for a fixed amount of
-       memory -- the memory usage for these settings and full use of all work
-       units (at least 4 MB of input) is 16.2 MB */
     level = Z_DEFAULT_COMPRESSION;
 #ifdef NOTHREAD
     procs = 1;
 #else
-    procs = 32;
+    procs = 8;
 #endif
     size = 131072UL;
     rsync = 0;                      /* don't do rsync blocking */
@@ -2345,6 +2645,17 @@ local char *longopts[][2] = {
     {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
     {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
+
+/* either new buffer size, new compression level, or new number of processes --
+   get rid of old buffers and threads to force the creation of new ones with
+   the new settings */
+local void new_opts(void)
+{
+    single_compress(1);
+#ifndef NOTHREAD
+    finish_jobs();
+#endif
+}
 
 /* process an option, return true if a file name and not an option */
 local int option(char *arg)
@@ -2389,8 +2700,8 @@ local int option(char *arg)
             switch (*arg) {
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
-                jobs_free();
                 level = *arg - '0';
+                new_opts();
                 break;
             case 'K':  form = 2;  sufx = ".zip";  break;
             case 'L':
@@ -2440,20 +2751,25 @@ local int option(char *arg)
                  get == 3 ? "-b and -p" :
                             (get == 5 ? "-b and -s" : "-p and -s"));
         if (get == 1) {
-            jobs_free();
             size = (size_t)(atol(arg)) << 10;   /* chunk size */
             if (size < DICT)
                 bail("block size too small (must be >= 32K)", "");
+            if (size + (size >> 11) + 10 < (size >> 11) + 10 ||
+                (ssize_t)(size + (size >> 11) + 10) < 0)
+                bail("block size too large", "");
+            new_opts();
         }
         else if (get == 2) {
-            jobs_free();
             procs = atoi(arg);                  /* # processes */
             if (procs < 1)
                 bail("need at least one process", "");
+            if ((2 + (procs << 1)) < 1)
+                bail("too many processes", "");
 #ifdef NOTHREAD
             if (procs > 1)
                 bail("this pigz compiled without threads", "");
 #endif
+            new_opts();
         }
         else if (get == 4)
             sufx = arg;                         /* gz suffix */
@@ -2463,6 +2779,16 @@ local int option(char *arg)
 
     /* neither an option nor parameter */
     return 1;
+}
+
+/* catch termination signal */
+local void cut_short(int sig)
+{
+    Trace(("termination by user"));
+    if (outd != -1 && out != NULL)
+        unlink(out);
+    log_dump();
+    _exit(1);
 }
 
 /* Process arguments, compress in the gzip format.  Note that procs must be at
@@ -2475,14 +2801,10 @@ int main(int argc, char **argv)
     char *opts, *p;                 /* environment default options, marker */
 
     /* prepare for interrupts and logging */
-    signal(SIGINT, cutshort);
+    signal(SIGINT, cut_short);
     gettimeofday(&start, NULL);
-
-#ifndef NOTHREAD
-    /* set thread creation defaults */
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-    pthread_attr_setstacksize(&attr, 524288UL);
+#ifdef DEBUG
+    log_init();
 #endif
 
     /* set all options to defaults */
@@ -2527,11 +2849,8 @@ int main(int argc, char **argv)
     if (done == 0)
         process(NULL);
 
-    /* done -- release work units allocated by compression */
-    jobs_free();
+    /* done -- release resources, show log */
+    new_opts();
     log_dump();
-#ifndef NOTHREAD
-    pthread_attr_destroy(&attr);
-#endif
     return 0;
 }
