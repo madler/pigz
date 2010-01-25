@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.1.2  30 Oct 2008  Mark Adler
+ * Version 2.1.3  8 Nov 2008  Mark Adler
  */
 
 /*
@@ -90,9 +90,10 @@
    2.1.1  28 Oct 2008  Fix a leak for files with an integer number of blocks
                        Update for yarn 1.1 (yarn_prefix and yarn_abort)
    2.1.2  30 Oct 2008  Work around use of beta zlib in production systems
+   2.1.3   8 Nov 2008  Don't use zlib combination routines, put back in pigz
  */
 
-#define VERSION "pigz 2.1.2\n"
+#define VERSION "pigz 2.1.3\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -241,7 +242,6 @@
                         /* struct dirent */
 #include <limits.h>     /* PATH_MAX */
 
-#undef _FILE_OFFSET_BITS    /* work around combine function parameters issue */
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
                            Z_DEFAULT_COMPRESSION, Z_DEFAULT_STRATEGY,
@@ -250,7 +250,6 @@
 #if !defined(ZLIB_VERNUM) || ZLIB_VERNUM < 0x1230
 #  error Need zlib version 1.2.3 or later
 #endif
-#define _FILE_OFFSET_BITS 64
 
 #ifndef NOTHREAD
 #  include "yarn.h"     /* thread, launch(), join(), join_all(), */
@@ -682,7 +681,110 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
 
 /* -- check value combination routines for parallel calculation -- */
 
-#define COMB(a,b,c) (form == 1 ? adler32_combine(a,b,c) : crc32_combine(a,b,c))
+#define COMB(a,b,c) (form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
+/* combine two crc-32's or two adler-32's (copied from zlib 1.2.3 so that pigz
+   can be compatible with older versions of zlib) */
+
+/* we copy the combination routines from zlib here, in order to avoid
+   linkage issues with the zlib builds on Sun, Ubuntu, and others */
+
+local unsigned long gf2_matrix_times(unsigned long *mat, unsigned long vec)
+{
+    unsigned long sum;
+
+    sum = 0;
+    while (vec) {
+        if (vec & 1)
+            sum ^= *mat;
+        vec >>= 1;
+        mat++;
+    }
+    return sum;
+}
+
+local void gf2_matrix_square(unsigned long *square, unsigned long *mat)
+{
+    int n;
+
+    for (n = 0; n < 32; n++)
+        square[n] = gf2_matrix_times(mat, mat[n]);
+}
+
+local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
+                               size_t len2)
+{
+    int n;
+    unsigned long row;
+    unsigned long even[32];     /* even-power-of-two zeros operator */
+    unsigned long odd[32];      /* odd-power-of-two zeros operator */
+
+    /* degenerate case */
+    if (len2 == 0)
+        return crc1;
+
+    /* put operator for one zero bit in odd */
+    odd[0] = 0xedb88320UL;          /* CRC-32 polynomial */
+    row = 1;
+    for (n = 1; n < 32; n++) {
+        odd[n] = row;
+        row <<= 1;
+    }
+
+    /* put operator for two zero bits in even */
+    gf2_matrix_square(even, odd);
+
+    /* put operator for four zero bits in odd */
+    gf2_matrix_square(odd, even);
+
+    /* apply len2 zeros to crc1 (first square will put the operator for one
+       zero byte, eight zero bits, in even) */
+    do {
+        /* apply zeros operator for this bit of len2 */
+        gf2_matrix_square(even, odd);
+        if (len2 & 1)
+            crc1 = gf2_matrix_times(even, crc1);
+        len2 >>= 1;
+
+        /* if no more bits set, then done */
+        if (len2 == 0)
+            break;
+
+        /* another iteration of the loop with odd and even swapped */
+        gf2_matrix_square(odd, even);
+        if (len2 & 1)
+            crc1 = gf2_matrix_times(odd, crc1);
+        len2 >>= 1;
+
+        /* if no more bits set, then done */
+    } while (len2 != 0);
+
+    /* return combined crc */
+    crc1 ^= crc2;
+    return crc1;
+}
+
+#define BASE 65521U     /* largest prime smaller than 65536 */
+#define LOW16 0xffff    /* mask lower 16 bits */
+
+local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
+                                 size_t len2)
+{
+    unsigned long sum1;
+    unsigned long sum2;
+    unsigned rem;
+
+    /* the derivation of this formula is left as an exercise for the reader */
+    rem = (unsigned)(len2 % BASE);
+    sum1 = adler1 & LOW16;
+    sum2 = (rem * sum1) % BASE;
+    sum1 += (adler2 & LOW16) + BASE - 1;
+    sum2 += ((adler1 >> 16) & LOW16) + ((adler2 >> 16) & LOW16) + BASE - rem;
+    if (sum1 >= BASE) sum1 -= BASE;
+    if (sum1 >= BASE) sum1 -= BASE;
+    if (sum2 >= (BASE << 1)) sum2 -= (BASE << 1);
+    if (sum2 >= BASE) sum2 -= BASE;
+    return sum1 | (sum2 << 16);
+}
 
 /* -- pool of spaces for buffer management -- */
 
