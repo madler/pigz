@@ -1,4 +1,4 @@
-pigz 2.01 (20 Oct 2008) by Mark Adler
+pigz 2.1 (24 Oct 2008) by Mark Adler
 
 pigz, which stands for Parallel Implementation of GZip, is a fully functional
 replacement for gzip that exploits multiple processors and multiple cores to
@@ -15,7 +15,7 @@ Type "pigz" to see the command help and all of the command options.
 
 The latest version of pigz can be found at http://zlib.net/pigz/ .  You need
 zlib version 1.2.3 or later to compile pigz.  You can find the latest version
-of zlib at http://zlib.net/ .
+of zlib at http://zlib.net/ .  You can look in pigz.c for the change history.
 
 Questions, comments, bug reports, fixes, etc. can be emailed to Mark at his
 address in the license below.
