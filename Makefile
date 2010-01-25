@@ -13,16 +13,16 @@ pigzt: pigzt.o yarnt.o
 	cc -o pigzt pigzt.o yarnt.o -lpthread -lz
 
 pigzt.o: pigz.c yarn.h
-	cc -Wall -pedantic -O3 -DDEBUG -c -o pigzt.o pigz.c
+	cc -Wall -O3 -DDEBUG -g -c -o pigzt.o pigz.c
 
 yarnt.o: yarn.c yarn.h
-	cc -Wall -pedantic -O3 -DDEBUG -c -o yarnt.o yarn.c
+	cc -Wall -O3 -DDEBUG -g -c -o yarnt.o yarn.c
 
 pigzn: pigzn.o
 	cc -o pigzn pigzn.o -lz
 
 pigzn.o: pigz.c
-	cc -Wall -pedantic -O3 -DDEBUG -DNOTHREAD -c -o pigzn.o pigz.c
+	cc -Wall -O3 -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
 
 clean:
 	rm -f *.o pigz pigzn pigzt

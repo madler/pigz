@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
  * Copyright (C) 2008 Mark Adler
- * Version 1.0  19 Oct 2008  Mark Adler
+ * Version 1.1  26 Oct 2008  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -8,6 +8,12 @@
    pthread references are isolated within this module to allow alternate
    implementations with other thread libraries.  See yarn.h for the description
    of these operations. */
+
+/* Version history:
+   1.0    19 Oct 2008  First version
+   1.1    26 Oct 2008  No need to set the stack size -- remove
+                       Add yarn_abort() function for clean-up on error exit
+ */
 
 /* for thread portability */
 #define _POSIX_PTHREAD_SEMANTICS
@@ -19,7 +25,7 @@
 #include <pthread.h>    /* pthread_t, pthread_create(), pthread_join(), */
     /* pthread_attr_t, pthread_attr_init(), pthread_attr_destroy(),
        PTHREAD_CREATE_JOINABLE, pthread_attr_setdetachstate(),
-       pthread_attr_setstacksize(), pthread_self(), pthread_equal(),
+       pthread_self(), pthread_equal(),
        pthread_mutex_t, PTHREAD_MUTEX_INITIALIZER, pthread_mutex_init(),
        pthread_mutex_lock(), pthread_mutex_unlock(), pthread_mutex_destroy(),
        pthread_cond_t, PTHREAD_COND_INITIALIZER, pthread_cond_init(),
@@ -31,17 +37,19 @@
 
 /* constants */
 #define local static            /* for non-exported functions and globals */
-#define STACK_SIZE 524288UL     /* stack size for every thread */
 
-/* error handling globals */
-extern char *yarn_prefix;
+/* error handling external globals, resettable by application */
+char *yarn_prefix = "yarn";
+void (*yarn_abort)(int) = NULL;
+
 
 /* immediately exit -- use for errors that shouldn't ever happen */
 local void fail(int err)
 {
-    fprintf(stderr, "%s: %s (%d) -- aborting\n",
-            yarn_prefix,
+    fprintf(stderr, "%s: %s (%d) -- aborting\n", yarn_prefix,
             err == ENOMEM ? "out of memory" : "internal pthread error", err);
+    if (yarn_abort != NULL)
+        yarn_abort(err);
     exit(err == ENOMEM || err == EAGAIN ? err : EINVAL);
 }
 
@@ -238,8 +246,7 @@ local void *ignition(void *arg)
 }
 
 /* not all POSIX implementations create threads as joinable by default, so that
-   is made explicit here -- we also set the stack size to make sure it is
-   adequate */
+   is made explicit here */
 thread *launch(void (*probe)(void *), void *payload)
 {
     int ret;
@@ -247,7 +254,7 @@ thread *launch(void (*probe)(void *), void *payload)
     struct capsule *capsule;
     pthread_attr_t attr;
 
-    /* construct the requested probe and argument for the ignition() routine
+    /* construct the requested call and argument for the ignition() routine
        (allocated instead of automatic so that we're sure this will still be
        there when ignition() actually starts up -- ignition() will free this
        allocation) */
@@ -263,7 +270,6 @@ thread *launch(void (*probe)(void *), void *payload)
     th = my_malloc(sizeof(struct thread_s));
     if ((ret = pthread_attr_init(&attr)) ||
         (ret = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE)) ||
-        (ret = pthread_attr_setstacksize(&attr, STACK_SIZE)) ||
         (ret = pthread_create(&(th->id), &attr, ignition, capsule)) ||
         (ret = pthread_attr_destroy(&attr)))
         fail(ret);

@@ -1,6 +1,6 @@
 /* yarn.h -- generic interface for thread operations
  * Copyright (C) 2008 Mark Adler
- * Version 1.0  19 Oct 2008  Mark Adler
+ * Version 1.1  26 Oct 2008  Mark Adler
  */
 
 /*
@@ -44,7 +44,7 @@
 
    thread *thread;          identifier for launched thread, used by join
    void probe(void *);      pointer to function "probe", run when thread starts
-   void *payload;           single argument to the probe function
+   void *payload;           single argument passed to the probe function
    lock *lock;              a lock with a value -- used for exclusive access to
                             an object and to synchronize threads waiting for
                             changes to an object
@@ -64,6 +64,9 @@
         called from the main thread, and should only be called after any calls
         of join() have completed)
    destruct(thread) - terminate the thread in mid-execution and join it
+        (depending on the implementation, the termination may not be immediate,
+        but may wait for the thread to execute certain thread or file i/o
+        operations)
 
    -- Lock functions --
 
@@ -97,13 +100,17 @@
 
    -- Error control --
 
-   yarn_name - an external char pointer to a string that will be the prefix for
-        any error messages that these routines generate before exiting -- this
-        global must be provided by some other module and linked with this one,
-        there is no default
+   yarn_name - a char pointer to a string that will be the prefix for any error
+        messages that these routines generate before exiting -- if not changed
+        by the application, "yarn" will be used
+   yarn_abort - an external function that will be executed when there is an
+        internal yarn error, due to out of memory or misuse -- this function
+        may exit to abort the application, or if it returns, the yarn error
+        handler will exit (set to NULL by default for no action)
  */
 
 extern char *yarn_prefix;
+extern void (*yarn_abort)(int);
 
 void yarn_mem(void *(*)(size_t), void (*)(void *));
 
