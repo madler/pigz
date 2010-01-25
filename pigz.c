@@ -1331,7 +1331,7 @@ local void ungz(void)
             check += GET();
             if (in_eof)
                 bail("corrupted zlib stream -- missing trailer: ", in);
-            if (check != out_check)
+            if (check != (out_check & 0xffffffffUL))
                 bail("corrupted zlib stream -- adler32 mismatch: ", in);
         }
         else {          /* gzip */
@@ -1345,7 +1345,7 @@ local void ungz(void)
             len += GET() << 24;
             if (in_eof)
                 bail("corrupted gzip stream -- missing trailer: ", in);
-            if (check != out_check)
+            if (check != (out_check & 0xffffffffUL))
                 bail("corrupted gzip stream -- crc32 mismatch: ", in);
             if (len != (out_tot & 0xffffffffUL))
                 bail("corrupted gzip stream -- length mismatch: ", in);
