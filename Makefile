@@ -1,4 +1,4 @@
-CFLAGS=-O3
+CFLAGS=-O3 -Wall -Wextra
 
 pigz: pigz.o yarn.o
 	cc -o pigz pigz.o yarn.o -lpthread -lz
