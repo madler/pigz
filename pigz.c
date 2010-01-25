@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.01  20 Oct 2008  Mark Adler
+ * Version 2.1  24 Oct 2008  Mark Adler
  */
 
 /*
@@ -78,10 +78,18 @@
    2.0    19 Oct 2008  Complete rewrite of thread usage and synchronization
                        Use polling threads and a pool of memory buffers
                        Remove direct pthread library use, hide in yarn.c
-   2.01   20 Oct 2008  Check version of zlib at compile time
+   2.01   20 Oct 2008  Check version of zlib at compile time, need >= 1.2.3
+   2.1    24 Oct 2008  Decompress with read, write, inflate, and check threads
+                       Remove spurious use of ctime_r(), ctime() more portable
+                       Change application of job->calc lock to be a semaphore
+                       Detect size of off_t at run time to select %lu vs. %llu
+                       #define large file support macro even if not __linux__
+                       Remove _LARGEFILE64_SOURCE, _FILE_OFFSET_BITS is enough
+                       Detect file-too-large error and report, blame build
+                       Replace check combination routines with those from zlib
  */
 
-#define VERSION "pigz 2.01\n"
+#define VERSION "pigz 2.1\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -118,6 +126,13 @@
    the --independent or -i option, so that the blocks can be decompressed
    independently for partial error recovery or for random access.
 
+   Decompression can't be parallelized, at least not without specially prepared
+   deflate streams for that purpose.  As a result, pigz uses a single thread
+   (the main thread) for decompression, but will create three other threads for
+   reading, writing, and check calculation, which can speed up decompression
+   under some circumstances.  Parallel decompression can be turned off by
+   specifying one process (-dp 1 or -tp 1).
+
    pigz requires zlib 1.2.1 or later to allow setting the dictionary when doing
    raw deflate.  Since zlib 1.2.3 corrects security vulnerabilities in zlib
    version 1.2.1 and 1.2.2, conditionals check for zlib 1.2.3 or later during
@@ -128,11 +143,6 @@
    equivalent implementations using other thread libraries.  pigz can be
    compiled with NOTHREAD #defined to not use threads at all (in which case
    pigz will not be able to live up to the "parallel" in its name).
-
-   Decompression can't be parallelized, at least not without specially prepared
-   deflate streams for that purpose.  For decompression, pigz only runs one
-   other thread for the check (CRC-32 or Adler-32) calculation, for a small
-   improvement in speed.
  */
 
 /*
@@ -200,11 +210,8 @@
    input buffers to the same number.
  */
 
-/* add a dash of portability */
-#ifdef __linux__
-#  define _LARGEFILE64_SOURCE
-#  define _FILE_OFFSET_BITS 64
-#endif
+/* use large file functions if available */
+#define _FILE_OFFSET_BITS 64
 
 /* included headers and what is expected from each */
 #include <stdio.h>      /* fflush(), fprintf(), fputs(), getchar(), putc(), */
@@ -217,7 +224,7 @@
                         /* strcpy(), strncpy(), strlen(), strcat() */
 #include <errno.h>      /* errno, EEXIST */
 #include <assert.h>     /* assert() */
-#include <time.h>       /* ctime(), ctime_r(), time(), time_t, mktime() */
+#include <time.h>       /* ctime(), time(), time_t, mktime() */
 #include <signal.h>     /* signal(), SIGINT */
 #include <sys/types.h>  /* ssize_t */
 #include <sys/stat.h>   /* chmod(), stat(), fstat(), lstat(), struct stat, */
@@ -496,7 +503,7 @@ local void writen(int desc, unsigned char *buf, size_t len)
 
 /* largest power of 2 that fits in an unsigned int -- used to limit requests
    to zlib functions that use unsigned int lengths */
-#define MAX ((((unsigned)-1) >> 1) + 1)
+#define MAX ((((unsigned)0 - 1) >> 1) + 1)
 
 /* convert Unix time to MS-DOS date and time, assuming current timezone
    (you got a better idea?) */
@@ -663,113 +670,11 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
 #define CHECK(a,b,c) (form == 1 ? adler32(a,b,c) : crc32(a,b,c))
 
 #ifndef NOTHREAD
-
 /* -- threaded portions of pigz -- */
-
-#define COMB(a,b,c) (form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
 
 /* -- check value combination routines for parallel calculation -- */
 
-/* combine two crc-32's or two adler-32's (copied from zlib 1.2.3 so that pigz
-   can be compatible with older versions of zlib) */
-
-local unsigned long gf2_matrix_times(unsigned long *mat, unsigned long vec)
-{
-    unsigned long sum;
-
-    sum = 0;
-    while (vec) {
-        if (vec & 1)
-            sum ^= *mat;
-        vec >>= 1;
-        mat++;
-    }
-    return sum;
-}
-
-local void gf2_matrix_square(unsigned long *square, unsigned long *mat)
-{
-    int n;
-
-    for (n = 0; n < 32; n++)
-        square[n] = gf2_matrix_times(mat, mat[n]);
-}
-
-local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
-                               size_t len2)
-{
-    int n;
-    unsigned long row;
-    unsigned long even[32];     /* even-power-of-two zeros operator */
-    unsigned long odd[32];      /* odd-power-of-two zeros operator */
-
-    /* degenerate case */
-    if (len2 == 0)
-        return crc1;
-
-    /* put operator for one zero bit in odd */
-    odd[0] = 0xedb88320UL;          /* CRC-32 polynomial */
-    row = 1;
-    for (n = 1; n < 32; n++) {
-        odd[n] = row;
-        row <<= 1;
-    }
-
-    /* put operator for two zero bits in even */
-    gf2_matrix_square(even, odd);
-
-    /* put operator for four zero bits in odd */
-    gf2_matrix_square(odd, even);
-
-    /* apply len2 zeros to crc1 (first square will put the operator for one
-       zero byte, eight zero bits, in even) */
-    do {
-        /* apply zeros operator for this bit of len2 */
-        gf2_matrix_square(even, odd);
-        if (len2 & 1)
-            crc1 = gf2_matrix_times(even, crc1);
-        len2 >>= 1;
-
-        /* if no more bits set, then done */
-        if (len2 == 0)
-            break;
-
-        /* another iteration of the loop with odd and even swapped */
-        gf2_matrix_square(odd, even);
-        if (len2 & 1)
-            crc1 = gf2_matrix_times(odd, crc1);
-        len2 >>= 1;
-
-        /* if no more bits set, then done */
-    } while (len2 != 0);
-
-    /* return combined crc */
-    crc1 ^= crc2;
-    return crc1;
-}
-
-#define BASE 65521U     /* largest prime smaller than 65536 */
-#define LOW16 0xffff    /* mask lower 16 bits */
-
-local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
-                                 size_t len2)
-{
-    unsigned long sum1;
-    unsigned long sum2;
-    unsigned rem;
-
-    /* the derivation of this formula is left as an exercise for the reader */
-    rem = (unsigned)(len2 % BASE);
-    sum1 = adler1 & LOW16;
-    sum2 = (rem * sum1) % BASE;
-    sum1 += (adler2 & LOW16) + BASE - 1;
-    sum2 += ((adler1 >> 16) & LOW16) + ((adler2 >> 16) & LOW16) + BASE - rem;
-    if (sum1 > BASE) sum1 -= BASE;
-    if (sum1 > BASE) sum1 -= BASE;
-    if (sum2 > (BASE << 1)) sum2 -= (BASE << 1);
-    if (sum2 > BASE) sum2 -= BASE;
-    return sum1 | (sum2 << 16);
-}
+#define COMB(a,b,c) (form == 1 ? adler32_combine(a,b,c) : crc32_combine(a,b,c))
 
 /* -- pool of spaces for buffer management -- */
 
@@ -1067,10 +972,8 @@ local void compress_thread(void *dummy)
         job->out->len = strm.next_out - (unsigned char *)(job->out->buf);
         Trace(("-- compressed %ld%s", job->seq, job->more ? "" : " (last)"));
 
-        /* lock check value and reserve the input buffer until check value has
-           been calculated */
+        /* reserve input buffer until check value has been calculated */
         use_space(job->in);
-        possess(job->calc);
 
         /* insert write job in list in sorted order, alert write thread */
         possess(write_first);
@@ -1084,8 +987,8 @@ local void compress_thread(void *dummy)
         *prior = job;
         twist(write_first, TO, write_head->seq);
 
-        /* calculate the check value in parallel with writing, unlock the check
-           value so the write thread can use it, and drop this usage of the
+        /* calculate the check value in parallel with writing, alert the write
+           thread that the calculation is complete, and drop this usage of the
            input buffer */
         len = job->in->len;
         next = job->in->buf;
@@ -1098,7 +1001,8 @@ local void compress_thread(void *dummy)
         check = CHECK(check, next, (unsigned)len);
         drop_space(job->in);
         job->check = check;
-        release(job->calc);
+        possess(job->calc);
+        twist(job->calc, TO, 1);
         Trace(("-- checked %ld%s", job->seq, job->more ? "" : " (last)"));
 
         /* done with that one -- go find another job */
@@ -1155,8 +1059,9 @@ local void write_thread(void *dummy)
         /* wait for check calculation to complete, then combine, once
            the compress thread is done with the input, release it */
         possess(job->calc);
-        check = COMB(check, job->check, len);
+        wait_for(job->calc, TO_BE, 1);
         release(job->calc);
+        check = COMB(check, job->check, len);
 
         /* free the job */
         free_lock(job->calc);
@@ -1362,14 +1267,114 @@ local unsigned char in_buf[BUF];    /* input buffer */
 local unsigned char *in_next;       /* next unused byte in buffer */
 local size_t in_left;               /* number of unused bytes in buffer */
 local int in_eof;                   /* true if reached end of file on input */
+local int in_short;                 /* true if last read didn't fill buffer */
 local off_t in_tot;                 /* total bytes read from input */
 local off_t out_tot;                /* total bytes written to output */
 local unsigned long out_check;      /* check value of output */
 
+#ifndef NOTHREAD
+/* parallel reading */
+
+local unsigned char in_buf2[BUF];   /* second buffer for parallel reads */
+local size_t in_len;                /* data waiting in next buffer */
+local int in_which;                 /* -1: start, 0: in_buf2, 1: in_buf */
+local lock *load_state;             /* value = 0 to wait, 1 to read a buffer */
+local thread *load_thread;          /* load_read() thread for joining */
+
+/* parallel read thread */
+local void load_read(void *dummy)
+{
+    size_t len;
+
+    do {
+        possess(load_state);
+        wait_for(load_state, TO_BE, 1);
+        in_len = len = readn(ind, in_which ? in_buf : in_buf2, BUF);
+        twist(load_state, TO, 0);
+    } while (len == BUF);
+}
+
+#endif
+
+/* load an input buffer, and set in_next and in_left to that data, update
+   in_tot, return in_left (only called when in_left has gone to zero) --
+   in_eof is set to true when in_left has gone to zero and there is no
+   more input to be had */
+local size_t load(void)
+{
+    /* if already detected end of file, do nothing */
+    if (in_short) {
+        in_eof = 1;
+        return 0;
+    }
+
+#ifndef NOTHREAD
+    /* if first time in or procs == 1, read a buffer to have something to
+       return, otherwise wait for the previous read job to complete */
+    if (procs > 1) {
+        if (in_which == -1) {
+            in_which = 1;
+            in_len = readn(ind, in_buf, BUF);
+            load_state = new_lock(0);
+            load_thread = launch(load_read, NULL);
+        }
+        else {
+            possess(load_state);
+            wait_for(load_state, TO_BE, 0);
+            release(load_state);
+        }
+
+        /* return the data just read */
+        in_next = in_which ? in_buf : in_buf2;
+        in_left = in_len;
+
+        /* if not at end of file, alert read thread to load next buffer */
+        if (in_left == BUF) {
+            in_which = 1 - in_which;
+            possess(load_state);
+            twist(load_state, TO, 1);
+        }
+
+        /* at end of file -- join read thread (already exited), clean up */
+        else {
+            join(load_thread);
+            free_lock(load_state);
+            in_which = -1;
+        }
+    }
+    else
+#endif
+        /* simply read a buffer */
+        in_left = readn(ind, in_next = in_buf, BUF);
+
+    /* note end of file */
+    if (in_left < BUF) {
+        in_short = 1;
+
+        /* if we got bupkis, now's the time to mark eof */
+        if (in_left == 0)
+            in_eof = 1;
+    }
+
+    /* update the total and return the available bytes */
+    in_tot += in_left;
+    return in_left;
+}
+
+/* initialize for reading new input */
+local void in_init(void)
+{
+    in_left = 0;
+    in_eof = 0;
+    in_short = 0;
+    in_tot = 0;
+#ifndef NOTHREAD
+    in_which = -1;
+#endif
+}
+
 /* buffered reading macros for decompresion and listing */
-#define LOAD() (in_eof ? 0 : (in_left = readn(ind, in_next = in_buf, BUF), \
-                    in_left ? (in_tot += in_left) : (in_eof = 1), in_left))
-#define GET() (in_eof || (in_left == 0 && LOAD() == 0) ? EOF : \
+#define GET() (in_eof || (in_left == 0 && load() == 0) ? EOF : \
                (in_left--, *in_next++))
 #define GET2() (tmp2 = GET(), tmp2 + (GET() << 8))
 #define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
@@ -1378,7 +1383,7 @@ local unsigned long out_check;      /* check value of output */
         size_t togo = (dist); \
         while (togo > in_left) { \
             togo -= in_left; \
-            if (LOAD() == 0) \
+            if (load() == 0) \
                 return -1; \
         } \
         in_left -= togo; \
@@ -1527,7 +1532,7 @@ local int get_header(int save)
                 memcpy(next, in_next, in_left);
                 fname -= in_left;
                 next += in_left;
-                if (LOAD() == 0)
+                if (load() == 0)
                     return -3;
             }
             memcpy(next, in_next, fname);
@@ -1579,7 +1584,7 @@ local int get_header(int save)
             bail("not enough memory", "");
         have = 0;
         do {
-            if (in_left == 0 && LOAD() == 0)
+            if (in_left == 0 && load() == 0)
                 return -3;
             end = memchr(in_next, 0, in_left);
             copy = end == NULL ? in_left : (end - in_next) + 1;
@@ -1649,8 +1654,7 @@ local size_t compressed_suffix(char *nm)
 #define NAMEMAX1 48     /* name display limit at vebosity 1 */
 #define NAMEMAX2 16     /* name display limit at vebosity 2 */
 
-/* print gzip or lzw file information -- this code assumes that off_t is a
-   long long type, and that the "ll" printf length modifier is available */
+/* print gzip or lzw file information */
 local void show_info(int method, unsigned long check, off_t len, int cont)
 {
     int max;                /* maximum name length for current verbosity */
@@ -1676,7 +1680,6 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
     /* convert time stamp to text */
     if (stamp) {
         strcpy(mod, ctime(&stamp));
-        ctime_r(&stamp, mod);
         now = time(NULL);
         if (strcmp(mod + 20, ctime(&now) + 20) != 0)
             strcpy(mod + 11, mod + 19);
@@ -1711,10 +1714,12 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
         if ((form == 3 && !decode) ||
             (method == 8 && in_tot > (len + (len >> 10) + 12)) ||
             (method == 256 && in_tot > len + (len >> 1) + 3))
-            printf("%10llu %10llu?  unk    %s\n",
+            printf(sizeof(off_t) == 4 ? "%10lu %10lu?  unk    %s\n" :
+                                        "%10llu %10llu?  unk    %s\n",
                    in_tot, len, name);
         else
-            printf("%10llu %10llu %6.1f%%  %s\n",
+            printf(sizeof(off_t) == 4 ? "%10lu %10lu %6.1f%%  %s\n" :
+                                        "%10llu %10llu %6.1f%%  %s\n",
                    in_tot, len,
                    len == 0 ? 0 : 100 * (len - in_tot)/(double)len,
                    name);
@@ -1732,10 +1737,8 @@ local void list_info(void)
     unsigned char tail[8];  /* trailer containing check and length */
     unsigned long check, len;   /* check value and length from trailer */
 
-    /* initialize buffer */
-    in_left = 0;
-    in_eof = 0;
-    in_tot = 0;
+    /* initialize input buffer */
+    in_init();
 
     /* read header information and position input after header */
     method = get_header(1);
@@ -1763,7 +1766,7 @@ local void list_info(void)
                 in_next += in_left - len;
                 while (len--)
                     check = (check << 8) + *in_next++;
-            } while (LOAD() != 0);
+            } while (load() != 0);
             check &= LOW32;
         }
         else {
@@ -1781,7 +1784,7 @@ local void list_info(void)
     if (method == 256) {
         at = lseek(ind, 0, SEEK_END);
         if (at == -1)
-            while (LOAD() != 0)
+            while (load() != 0)
                 ;
         else
             in_tot = at;
@@ -1791,7 +1794,7 @@ local void list_info(void)
     }
 
     /* skip to end to get trailer (8 bytes), compute compressed length */
-    if (in_next - in_buf < BUF - in_left) { /* whole thing already read */
+    if (in_short) {                     /* whole thing already read */
         if (in_left < 8) {
             if (verbosity > 0)
                 fprintf(stderr, "%s not a valid gzip file -- skipping\n",
@@ -1810,7 +1813,7 @@ local void list_info(void)
         do {
             n = in_left < 8 ? in_left : 8;
             memcpy(tail, in_next + (in_left - n), n);
-            LOAD();
+            load();
         } while (in_left == BUF);       /* read until end */
         if (in_left < 8) {
             if (n + in_left < 8) {
@@ -1844,75 +1847,122 @@ local void list_info(void)
     RELEASE(hname);
 }
 
-/* --- decompress gzip or zlib input --- */
+/* --- decompress deflate input --- */
 
 /* call-back input function for inflateBack() */
 local unsigned inb(void *desc, unsigned char **buf)
 {
-    LOAD();
+    load();
     *buf = in_next;
     return in_left;
 }
 
-#ifdef NOTHREAD
+/* output buffers and window for infchk() and unlzw() */
+#define OUTSIZE 32768U      /* must be at least 32K for inflateBack() window */
+local unsigned char out_buf[OUTSIZE];
 
-/* call-back output function for inflateBack() */
-local int outb(void *desc, unsigned char *buf, unsigned len)
+#ifndef NOTHREAD
+/* output data for parallel write and check */
+local unsigned char out_copy[OUTSIZE];
+local size_t out_len;
+
+/* outb threads locks */
+local lock *outb_write_more = NULL;
+local lock *outb_check_more;
+
+/* output write thread */
+local void outb_write(void *dummy)
 {
-    out_tot += len;
-    out_check = CHECK(out_check, buf, len);
-    if (decode == 1)
-        writen(outd, buf, len);
-    return 0;
+    size_t len;
+
+    Trace(("-- launched decompress write thread"));
+    do {
+        possess(outb_write_more);
+        wait_for(outb_write_more, TO_BE, 1);
+        len = out_len;
+        if (len && decode == 1)
+            writen(outd, out_copy, len);
+        Trace(("-- decompress wrote %lu bytes", len));
+        twist(outb_write_more, TO, 0);
+    } while (len);
+    Trace(("-- exited decompress write thread"));
 }
 
-#else
-
-/* check value work unit */
-struct do_check {
-    unsigned long check;
-    unsigned char *buf;
-    unsigned len;
-};
-
-/* check value computation thread */
-local void run_check(void *arg)
+/* output check thread */
+local void outb_check(void *dummy)
 {
-    struct do_check *work = arg;
+    size_t len;
 
-    work->check = CHECK(work->check, work->buf, work->len);
-    return;
+    Trace(("-- launched decompress check thread"));
+    do {
+        possess(outb_check_more);
+        wait_for(outb_check_more, TO_BE, 1);
+        len = out_len;
+        out_check = CHECK(out_check, out_copy, len);
+        Trace(("-- decompress checked %lu bytes", len));
+        twist(outb_check_more, TO, 0);
+    } while (len);
+    Trace(("-- exited decompress check thread"));
 }
-
-/* call-back output function for inflateBack() */
-local int outb(void *desc, unsigned char *buf, unsigned len)
-{
-    struct do_check work;
-    thread *check = NULL;
-
-    out_tot += len;
-    if (procs > 1) {
-        work.check = out_check;
-        work.buf = buf;
-        work.len = len;
-        check = launch(run_check, &work);
-    }
-    else
-        out_check = CHECK(out_check, buf, len);
-    if (decode == 1)
-        writen(outd, buf, len);
-    if (procs > 1) {
-        join(check);
-        out_check = work.check;
-    }
-    return 0;
-}
-
 #endif
 
-/* output buffer and window for infchk() and unlzw() */
-#define OUTSIZE 32768U      /* must be at least 32K for inflateBack() window */
-local unsigned char outbuf[OUTSIZE];
+/* call-back output function for inflateBack() -- wait for the last write and
+   check calculation to complete, copy the write buffer, and then alert the
+   write and check threads and return for more decompression while that's
+   going on (or just write and check if no threads or if proc == 1) */
+local int outb(void *desc, unsigned char *buf, unsigned len)
+{
+#ifndef NOTHREAD
+    static thread *wr, *ch;
+
+    if (procs > 1) {
+        /* if first time, initialize state and launch threads */
+        if (outb_write_more == NULL) {
+            outb_write_more = new_lock(0);
+            outb_check_more = new_lock(0);
+            wr = launch(outb_write, NULL);
+            ch = launch(outb_check, NULL);
+        }
+
+        /* wait for previous write and check threads to complete */
+        possess(outb_check_more);
+        wait_for(outb_check_more, TO_BE, 0);
+        possess(outb_write_more);
+        wait_for(outb_write_more, TO_BE, 0);
+
+        /* copy the output and alert the worker bees */
+        out_len = len;
+        out_tot += len;
+        memcpy(out_copy, buf, len);
+        twist(outb_write_more, TO, 1);
+        twist(outb_check_more, TO, 1);
+
+        /* if requested with len == 0, clean up -- terminate and join write and
+           check threads, free lock */
+        if (len == 0) {
+            join(ch);
+            join(wr);
+            free_lock(outb_check_more);
+            free_lock(outb_write_more);
+            outb_write_more = NULL;
+        }
+
+        /* return for more decompression while last buffer is being written
+           and having its check value calculated -- we wait for those to finish
+           the next time this function is called */
+        return 0;
+    }
+#endif
+
+    /* if just one process or no threads, then do it without threads */
+    if (len) {
+        if (decode == 1)
+            writen(outd, buf, len);
+        out_check = CHECK(out_check, buf, len);
+        out_tot += len;
+    }
+    return 0;
+}
 
 /* inflate for decompression or testing -- decompress from ind to outd unless
    decode != 1, in which case just test ind, and then also list if list != 0;
@@ -1936,7 +1986,7 @@ local void infchk(void)
         strm.zalloc = Z_NULL;
         strm.zfree = Z_NULL;
         strm.opaque = Z_NULL;
-        ret = inflateBackInit(&strm, 15, outbuf);
+        ret = inflateBackInit(&strm, 15, out_buf);
         if (ret != Z_OK)
             bail("not enough memory", "");
 
@@ -1949,6 +1999,7 @@ local void infchk(void)
         in_left = strm.avail_in;
         in_next = strm.next_in;
         inflateBackEnd(&strm);
+        outb(NULL, NULL, 0);        /* finish off final write and check */
 
         /* compute compressed data length */
         clen = in_tot - in_left;
@@ -2037,7 +2088,7 @@ unsigned char match[65280 + 2];         /* buffer for reversed match */
         rem = 0; \
         if (chunk > in_left) { \
             chunk -= in_left; \
-            if (LOAD() == 0) \
+            if (load() == 0) \
                 break; \
             if (chunk > in_left) { \
                 chunk = in_left = 0; \
@@ -2101,7 +2152,7 @@ local void unlzw(void)
     rem = (unsigned)got >> 1;               /* remaining 7 bits */
     left = 7;
     chunk = bits - 2;                       /* 7 bytes left in this chunk */
-    outbuf[0] = (unsigned char)final;       /* write first decompressed byte */
+    out_buf[0] = (unsigned char)final;      /* write first decompressed byte */
     outcnt = 1;
 
     /* decode codes */
@@ -2124,7 +2175,7 @@ local void unlzw(void)
             /* write remaining buffered output */
             out_tot += outcnt;
             if (outcnt && decode == 1)
-                writen(outd, outbuf, outcnt);
+                writen(outd, out_buf, outcnt);
             return;
         }
         code += (unsigned)got << left;      /* middle (or high) bits of code */
@@ -2191,15 +2242,15 @@ local void unlzw(void)
         /* write output in forward order */
         while (stack > OUTSIZE - outcnt) {
             while (outcnt < OUTSIZE)
-                outbuf[outcnt++] = match[--stack];
+                out_buf[outcnt++] = match[--stack];
             out_tot += outcnt;
             if (decode == 1)
-                writen(outd, outbuf, outcnt);
+                writen(outd, out_buf, outcnt);
             outcnt = 0;
         }
         p = match + stack;
         do {
-            outbuf[outcnt++] = *--p;
+            out_buf[outcnt++] = *--p;
         } while (p > match);
         stack = 0;
 
@@ -2291,6 +2342,11 @@ local void process(char *path)
         /* only process regular files, but allow symbolic links if -f,
            recurse into directory if -r */
         if (lstat(in, &st)) {
+#ifdef EOVERFLOW
+            if (errno == EOVERFLOW || errno == EFBIG)
+                bail(in,
+                    " too large -- pigz not compiled with large file support");
+#endif
             if (verbosity > 0)
                 fprintf(stderr, "%s does not exist -- skipping\n", in);
             return;
@@ -2415,9 +2471,7 @@ local void process(char *path)
     /* if decoding or testing, try to read gzip header */
     hname = NULL;
     if (decode) {
-        in_left = 0;
-        in_eof = 0;
-        in_tot = 0;
+        in_init();
         method = get_header(1);
         if (method != 8 && method != 256) {
             RELEASE(hname);
