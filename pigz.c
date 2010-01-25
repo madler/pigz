@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.0  19 Oct 2008  Mark Adler
+ * Version 2.01  20 Oct 2008  Mark Adler
  */
 
 /*
@@ -78,9 +78,10 @@
    2.0    19 Oct 2008  Complete rewrite of thread usage and synchronization
                        Use polling threads and a pool of memory buffers
                        Remove direct pthread library use, hide in yarn.c
+   2.01   20 Oct 2008  Check version of zlib at compile time
  */
 
-#define VERSION "pigz 2.0\n"
+#define VERSION "pigz 2.01\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -118,9 +119,9 @@
    independently for partial error recovery or for random access.
 
    pigz requires zlib 1.2.1 or later to allow setting the dictionary when doing
-   raw deflate.  pigz will compile and run with earlier versions of zlib, but
-   this will effectively force the --independent option, somewhat degrading
-   compression.
+   raw deflate.  Since zlib 1.2.3 corrects security vulnerabilities in zlib
+   version 1.2.1 and 1.2.2, conditionals check for zlib 1.2.3 or later during
+   the compilation of pigz.c.
 
    pigz uses the POSIX pthread library for thread control and communication,
    through the yarn.h interface to yarn.c.  yarn.c can be replaced with
@@ -234,6 +235,9 @@
                            Z_DEFAULT_COMPRESSION, Z_DEFAULT_STRATEGY,
                            Z_DEFLATED, Z_NO_FLUSH, Z_NULL, Z_OK,
                            Z_SYNC_FLUSH, z_stream */
+#if !defined(ZLIB_VERNUM) || ZLIB_VERNUM < 0x1230
+#  error Need zlib version 1.2.3 or later
+#endif
 #ifndef NOTHREAD
 #  include "yarn.h"     /* thread, launch(), join(), join_all(), */
                         /* lock, new_lock(), possess(), twist(), wait_for(),

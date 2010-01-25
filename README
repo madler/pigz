@@ -1,4 +1,4 @@
-pigz 2.0 (19 Oct 2008) by Mark Adler
+pigz 2.01 (20 Oct 2008) by Mark Adler
 
 pigz, which stands for Parallel Implementation of GZip, is a fully functional
 replacement for gzip that exploits multiple processors and multiple cores to
@@ -7,12 +7,18 @@ the hilt when compressing data.
 pigz was written by Mark Adler, and uses the zlib and pthread libraries.
 
 This version of pigz is written to be portable across Unix-style operating
-systems that provide the zlib and pthread libraries.  Type "make" in this
-directory to build the "pigz" executable.  You can then install the
-executable wherever you like in your path (e.g. /usr/local/bin/).  Type
-"pigz" to see the command help and all of the command options.
+systems that provide the zlib and pthread libraries.
 
-The latest version of pigz can be found at http://zlib.net/pigz/ .  Questions, comments, bug reports, fixes, etc. can be emailed to Mark at his address in the license below.
+Type "make" in this directory to build the "pigz" executable.  You can then
+install the executable wherever you like in your path (e.g. /usr/local/bin/).
+Type "pigz" to see the command help and all of the command options.
+
+The latest version of pigz can be found at http://zlib.net/pigz/ .  You need
+zlib version 1.2.3 or later to compile pigz.  You can find the latest version
+of zlib at http://zlib.net/ .
+
+Questions, comments, bug reports, fixes, etc. can be emailed to Mark at his
+address in the license below.
 
 The license from pigz.c is copied here:
 
