@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.1.4  9 Nov 2008  Mark Adler
+ * Copyright (C) 2007, 2008, 2009 Mark Adler
+ * Version 2.1.5  20 Jul 2009  Mark Adler
  */
 
 /*
@@ -92,14 +92,23 @@
    2.1.2  30 Oct 2008  Work around use of beta zlib in production systems
    2.1.3   8 Nov 2008  Don't use zlib combination routines, put back in pigz
    2.1.4   9 Nov 2008  Fix bug when decompressing very short files
+   2.1.5  20 Jul 2009  Added 2008, 2009 to --license statement
+                       Allow numeric parameter immediately after -p or -b
+                       Enforce parameter after -p, -b, -s, before other options
+                       Enforce numeric parameters to have only numeric digits
+                       Try to determine the number of processors for -p default
+                       Fix --suffix short option to be -S to match gzip [Bloch]
+                       Decompress if executable named "unpigz" [Amundsen]
+                       Add a little bit of testing to Makefile
  */
 
-#define VERSION "pigz 2.1.4\n"
+#define VERSION "pigz 2.1.5\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
     - make source portable for Windows, VMS, etc. (see gzip source code)
     - make build portable (currently good for Unixish)
+    - add bzip2 decompression
  */
 
 /*
@@ -124,6 +133,9 @@
    The default input block size is 128K, but can be changed with the -b option.
    The number of compress threads is set by default to 8, which can be changed
    using the -p option.  Specifying -p 1 avoids the use of threads entirely.
+   pigz will try to determine the number of processors in the machine, in which
+   case if that number is two or greater, pigz will use that as the default for
+   -p instead of 8.
 
    The input blocks, while compressed independently, have the last 32K of the
    previous block loaded as a preset dictionary to preserve the compression
@@ -141,7 +153,14 @@
    pigz requires zlib 1.2.1 or later to allow setting the dictionary when doing
    raw deflate.  Since zlib 1.2.3 corrects security vulnerabilities in zlib
    version 1.2.1 and 1.2.2, conditionals check for zlib 1.2.3 or later during
-   the compilation of pigz.c.
+   the compilation of pigz.c.  zlib 1.2.4 includes some improvements to
+   Z_FULL_FLUSH and deflateSetDictionary() that permit identical output for
+   pigz with and without threads, which is not possible with zlib 1.2.3.  This
+   may be important for uses of pigz -R where small changes in the contents
+   should result in small changes in the archive for rsync.  Note that due to
+   the details of how the lower levels of compression result in greater speed,
+   compression level 3 and below does not permit identical pigz output with
+   and without threads.
 
    pigz uses the POSIX pthread library for thread control and communication,
    through the yarn.h interface to yarn.c.  yarn.c can be replaced with
@@ -225,8 +244,8 @@
 #include <stdlib.h>     /* exit(), malloc(), free(), realloc(), atol(), */
                         /* atoi(), getenv() */
 #include <stdarg.h>     /* va_start(), va_end(), va_list */
-#include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), */
-                        /* strcpy(), strncpy(), strlen(), strcat() */
+#include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), strcpy() */
+                        /* strncpy(), strlen(), strcat(), strrchr() */
 #include <errno.h>      /* errno, EEXIST */
 #include <assert.h>     /* assert() */
 #include <time.h>       /* ctime(), time(), time_t, mktime() */
@@ -687,7 +706,7 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
    can be compatible with older versions of zlib) */
 
 /* we copy the combination routines from zlib here, in order to avoid
-   linkage issues with the zlib builds on Sun, Ubuntu, and others */
+   linkage issues with the zlib 1.2.3 builds on Sun, Ubuntu, and others */
 
 local unsigned long gf2_matrix_times(unsigned long *mat, unsigned long vec)
 {
@@ -2750,7 +2769,8 @@ local char *helptext[] = {
 "  -0 to -9, --fast, --best   Compression levels, --fast is -1, --best is -9",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 #ifndef NOTHREAD
-"  -p, --processes n    Allow up to n compression threads (default 8)",
+"  -p, --processes n    Allow up to n compression threads (default is the",
+"                       number of online processors, or 8 if unknown)",
 #endif
 "  -i, --independent    Compress blocks independently for damage recovery",
 "  -R, --rsyncable      Input-determined block locations for rsync",
@@ -2759,7 +2779,7 @@ local char *helptext[] = {
 "  -l, --list           List the contents of the compressed input",
 "  -f, --force          Force overwrite, compress .gz, links, and to terminal",
 "  -r, --recursive      Process the contents of all subdirectories",
-"  -s, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
+"  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
 "  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -k, --keep           Do not delete original file after processing",
@@ -2788,6 +2808,23 @@ local void help(void)
     exit(0);
 }
 
+#ifndef NOTHREAD
+
+/* try to determine the number of processors */
+local int nprocs(int n)
+{
+#  ifdef _SC_NPROCESSORS_ONLN
+    n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#  else
+#    ifdef _SC_NPROC_ONLN
+    n = (int)sysconf(_SC_NPROC_ONLN);
+#    endif
+#  endif
+    return n;
+}
+
+#endif
+
 /* set option defaults */
 local void defaults(void)
 {
@@ -2795,7 +2832,7 @@ local void defaults(void)
 #ifdef NOTHREAD
     procs = 1;
 #else
-    procs = 8;
+    procs = nprocs(8);
 #endif
     size = 131072UL;
     rsync = 0;                      /* don't do rsync blocking */
@@ -2819,7 +2856,7 @@ local char *longopts[][2] = {
     {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
     {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "T"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
-    {"silent", "q"}, {"stdout", "c"}, {"suffix", "s"}, {"test", "t"},
+    {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
     {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
     {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
@@ -2835,31 +2872,44 @@ local void new_opts(void)
 #endif
 }
 
+/* verify that arg is only digits, and if so, return the decimal value */
+local size_t num(char *arg)
+{
+    char *str = arg;
+    size_t val = 0;
+
+    if (*str == 0)
+        bail("internal error: empty parameter", "");
+    do {
+        if (*str < '0' || *str > '9')
+            bail("invalid numeric parameter: ", arg);
+        val = val * 10 + (*str - '0');
+        /* %% need to detect overflow here */
+    } while (*++str);
+    return val;
+}
+
 /* process an option, return true if a file name and not an option */
 local int option(char *arg)
 {
-    static int get = 0;
+    static int get = 0;     /* if not zero, look for option parameter */
+    char bad[3] = "-X";     /* for error messages (X is replaced) */
 
-    /* if no argument, check status of get */
-    if (arg == NULL) {
-        if (get)
-            bail("missing option argument for -",
-                 get & 1 ? "b" : (get & 2 ? "p" : "s"));
-        return 0;
+    /* if no argument or dash option, check status of get */
+    if (get && (arg == NULL || *arg == '-')) {
+        bad[1] = "bps"[get - 1];
+        bail("missing parameter after ", bad);
     }
+    if (arg == NULL)
+        return 0;
 
     /* process long option or short options */
     if (*arg == '-') {
-        if (get)
-            bail("require parameter after -",
-                 get & 1 ? "b" : (get & 2 ? "p" : "s"));
-        arg++;
-
         /* a single dash will be interpreted as stdin */
-        if (*arg == 0)
+        if (*++arg == 0)
             return 1;
 
-        /* process long option */
+        /* process long option (fall through with equivalent short option) */
         if (*arg == '-') {
             int j;
 
@@ -2873,8 +2923,18 @@ local int option(char *arg)
                 bail("invalid option: ", arg - 2);
         }
 
-        /* process short options */
+        /* process short options (more than one allowed after dash) */
         do {
+            /* if looking for a parameter, don't process more single character
+               options until we have the parameter */
+            if (get) {
+                if (get == 3)
+                    bail("invalid usage: -s must be followed by space", "");
+                break;      /* allow -pnnn and -bnnn, fall to parameter code */
+            }
+
+            /* process next single character option */
+            bad[1] = *arg;
             switch (*arg) {
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
@@ -2884,7 +2944,7 @@ local int option(char *arg)
             case 'K':  form = 2;  sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007 Mark Adler\n", stderr);
+                fputs("Copyright (C) 2007, 2008, 2009 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
@@ -2892,13 +2952,14 @@ local int option(char *arg)
             case 'N':  headis = 3;  break;
             case 'T':  headis &= ~2;  break;
             case 'R':  rsync = 1;
-                bail("rsyncable not implemented yet", "");
+                bail("invalid option: rsyncable not implemented yet: ", bad);
+            case 'S':  get = 3;  break;
             case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
-                bail("invalid option: LZW output not supported", "");
+                bail("invalid option: LZW output not supported: ", bad);
             case 'a':
-                bail("invalid option: ascii conversion not supported", "");
-            case 'b':  get |= 1;  break;
+                bail("invalid option: ascii conversion not supported: ", bad);
+            case 'b':  get = 1;  break;
             case 'c':  pipeout = 1;  break;
             case 'd':  decode = 1;  headis = 0;  break;
             case 'f':  force = 1;  break;
@@ -2907,49 +2968,49 @@ local int option(char *arg)
             case 'k':  keep = 1;  break;
             case 'l':  list = 1;  break;
             case 'n':  headis &= ~1;  break;
-            case 'p':  get |= 2;  break;
+            case 'p':  get = 2;  break;
             case 'q':  verbosity = 0;  break;
             case 'r':  recurse = 1;  break;
-            case 's':  get |= 4;  break;
             case 't':  decode = 2;  break;
             case 'v':  verbosity++;  break;
             case 'z':  form = 1;  sufx = ".zz";  break;
             default:
-                arg[1] = 0;
-                bail("invalid option: -", arg);
+                bail("invalid option: ", bad);
             }
         } while (*++arg);
-        return 0;
+        if (*arg == 0)
+            return 0;
     }
 
     /* process option parameter for -b, -p, or -s */
     if (get) {
-        if (get != 1 && get != 2 && get != 4)
-            bail("you need to separate ",
-                 get == 3 ? "-b and -p" :
-                            (get == 5 ? "-b and -s" : "-p and -s"));
+        size_t n;
+
         if (get == 1) {
-            size = (size_t)(atol(arg)) << 10;   /* chunk size */
+            n = num(arg);
+            size = n << 10;                     /* chunk size */
             if (size < DICT)
                 bail("block size too small (must be >= 32K)", "");
-            if (size + (size >> 11) + 10 < (size >> 11) + 10 ||
+            if (n != size >> 10 ||
+                size + (size >> 11) + 10 < size ||
                 (ssize_t)(size + (size >> 11) + 10) < 0)
-                bail("block size too large", "");
+                bail("block size too large: ", arg);
             new_opts();
         }
         else if (get == 2) {
-            procs = atoi(arg);                  /* # processes */
+            n = num(arg);
+            procs = (int)n;                     /* # processes */
             if (procs < 1)
-                bail("need at least one process", "");
-            if ((2 + (procs << 1)) < 1)
-                bail("too many processes", "");
+                bail("invalid number of processes: ", arg);
+            if (procs != n || ((procs << 1) + 2) < 1)
+                bail("too many processes: ", arg);
 #ifdef NOTHREAD
             if (procs > 1)
                 bail("this pigz compiled without threads", "");
 #endif
             new_opts();
         }
-        else if (get == 4)
+        else if (get == 3)
             sufx = arg;                         /* gz suffix */
         get = 0;
         return 0;
@@ -3013,6 +3074,11 @@ int main(int argc, char **argv)
     /* if no command line arguments and stdout is a terminal, show help */
     if (argc < 2 && isatty(1))
         help();
+
+    /* decompress if named "unpigz" */
+    p = strrchr(argv[0], '/');
+    if (strcmp(p == NULL ? argv[0] : p + 1, "unpigz") == 0)
+        decode = 1, headis = 0;
 
     /* process command-line arguments */
     done = 0;

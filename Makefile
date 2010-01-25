@@ -2,6 +2,7 @@ CFLAGS=-O2
 
 pigz: pigz.o yarn.o
 	cc -o pigz pigz.o yarn.o -lpthread -lz
+	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h
 
@@ -24,5 +25,18 @@ pigzn: pigzn.o
 pigzn.o: pigz.c
 	cc -Wall -O3 -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
 
+test: pigz
+	./pigz -kf pigz.c ; ./pigz -t pigz.c.gz
+	./pigz -kfb 32 pigz.c ; ./pigz -t pigz.c.gz
+	./pigz -kfp 1 pigz.c ; ./pigz -t pigz.c.gz
+	./pigz -kfz pigz.c ; ./pigz -t pigz.c.zz
+	./pigz -kfK pigz.c ; ./pigz -t pigz.c.zip
+	compress -f < pigz.c | ./unpigz | cmp - pigz.c
+	rm -f pigz.c.gz pigz.c.zz pigz.c.zip
+
+tests: dev test
+	./pigzn -kf pigz.c ; ./pigz -t pigz.c.gz
+	rm -f pigz.c.gz
+
 clean:
-	rm -f *.o pigz pigzn pigzt
+	rm -f *.o pigz unpigz pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
