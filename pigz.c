@@ -1,6 +1,27 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007 Mark Adler
- * Version 1.3  25 February 2007  Mark Adler
+ * Version 1.4  4 March 2007  Mark Adler
+ */
+
+/*
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the author be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+
+  Mark Adler
+  madler@alumni.caltech.edu
  */
 
 /* Version history:
@@ -13,7 +34,7 @@
                        Tune argument defaults to best performance on four cores
    1.2.1   1 Feb 2007  Add long command line options, add all gzip options
                        Add debugging options
-   1.2.2  19 Feb 2007  Add list (-l) function
+   1.2.2  19 Feb 2007  Add list (--list) function
                        Process file names on command line, write .gz output
                        Write name and time in gzip header, set output file time
                        Implement all command line options except --recursive
@@ -25,10 +46,18 @@
                        Show help if no arguments or output piping are provided
                        Process options in GZIP environment variable
                        Add progress indicator to write thread if --verbose
+   1.4     4 Mar 2007  Add --independent to facilitate damaged file recovery
+                       Reallocate jobs for new --blocksize or --processes
+                       Do not delete original if writing to stdout
+                       Allow --processes 1, which does no threading
+                       Add NOTHREAD define to compile without threads
+                       Incorporate license text from zlib in source code
  */
 
+#define VERSION "pigz 1.4\n"
+
 /* To-do:
-    - add option to not use multiple threads (faster on single processor)
+    - add --rsyncable (or -R) [use my own algorithm, set min block size]
     - incorporate gun into pigz
     - list (-l) LZW files
     - optionally have list (-l) decompress entire input to find it all (if -d)
@@ -82,6 +111,7 @@
 #include <errno.h>      /* errno, EEXIST */
 #include <time.h>       /* ctime(), ctime_r(), time(), time_t */
 #include <signal.h>     /* signal(), SIGINT */
+#ifndef NOTHREAD
 #include <pthread.h>    /* pthread_attr_destroy(), pthread_attr_init(), */
                         /* pthread_attr_setdetachstate(),
                            pthread_attr_setstacksize(), pthread_attr_t,
@@ -92,6 +122,7 @@
                            pthread_mutex_lock(), pthread_mutex_t,
                            pthread_mutex_unlock(), pthread_t,
                            PTHREAD_CREATE_JOINABLE */
+#endif
 #include <sys/types.h>  /* ssize_t */
 #include <sys/stat.h>   /* fstat(), lstat(), struct stat, S_IFDIR, S_IFLNK, */
                         /* S_IFMT, S_IFREG */
@@ -119,6 +150,8 @@
 #else
 #  define SET_BINARY_MODE(fd)
 #endif
+
+#ifndef NOTHREAD
 
 /* combine two crc's (copied from zlib 1.2.3) */
 
@@ -197,6 +230,8 @@ local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
     return crc1;
 }
 
+#endif
+
 /* read-only globals (set by main/read thread before others started) */
 local int ind;              /* input file descriptor */
 local int outd;             /* output file descriptor */
@@ -214,6 +249,7 @@ local time_t mtime;         /* time stamp for gzip header */
 local int list;             /* true to list files instead of compress */
 local int level;            /* compression level */
 local int procs;            /* number of compression threads (>= 2) */
+local int dict;             /* true to initialize dictionary in each thread */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
 local struct timeval start; /* starting time of day for tracing */
 
@@ -233,7 +269,9 @@ struct log {
     char *msg;              /* message */
     struct log *next;       /* next entry */
 } *log_head = NULL, **log_tail = &log_head;
+#ifndef NOTHREAD
 local pthread_mutex_t logex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 /* maximum log entry length */
 #define MAXMSG 256
@@ -241,7 +279,6 @@ local pthread_mutex_t logex = PTHREAD_MUTEX_INITIALIZER;
 /* add entry to trace log */
 local void log_add(char *fmt, ...)
 {
-    int ret;
     struct timeval now;
     struct log *me;
     va_list ap;
@@ -262,31 +299,36 @@ local void log_add(char *fmt, ...)
     }
     strcpy(me->msg, msg);
     me->next = NULL;
-    ret = pthread_mutex_lock(&logex);
-    if (ret)
+#ifndef NOTHREAD
+    if (pthread_mutex_lock(&logex))
         bail("mutex_lock error in ", "log_add");
+#endif
     *log_tail = me;
     log_tail = &(me->next);
+#ifndef NOTHREAD
     pthread_mutex_unlock(&logex);
+#endif
 }
 
 /* pull entry from trace log and print it, return false if empty */
 local int log_show(void)
 {
-    int ret;
     struct log *me;
     struct timeval diff;
 
-    ret = pthread_mutex_lock(&logex);
-    if (ret)
+#ifndef NOTHREAD
+    if (pthread_mutex_lock(&logex))
         bail("mutex_lock error in ", "log_show");
+#endif
     me = log_head;
     if (me != NULL) {
         log_head = me->next;
         if (me->next == NULL)
             log_tail = &log_head;
     }
+#ifndef NOTHREAD
     pthread_mutex_unlock(&logex);
+#endif
     if (me == NULL)
         return 0;
     diff.tv_usec = me->when.tv_usec - start.tv_usec;
@@ -363,6 +405,8 @@ local void writen(int desc, unsigned char *buf, size_t len)
     }
 }
 
+#ifndef NOTHREAD
+
 /* a flag variable for communication between two threads */
 struct flag {
     int value;              /* value of flag */
@@ -424,6 +468,17 @@ local void flag_done(struct flag *me)
     pthread_mutex_destroy(&(me->lock));
 }
 
+/* busy flag values */
+#define IDLE 0          /* compress and writing done -- can start compress */
+#define COMP 1          /* compress -- input and output buffers in use */
+#define WRITE 2         /* compress done, writing output -- can read input */
+
+/* next and previous jobs[] indices */
+#define NEXT(n) ((n) == procs - 1 ? 0 : (n) + 1)
+#define PREV(n) ((n) == 0 ? procs - 1 : (n) - 1)
+
+#endif
+
 /* work units to feed to compress_thread() -- it is assumed that the out
    buffer is large enough to hold the maximum size len bytes could deflate to,
    plus five bytes for the final sync marker */
@@ -433,18 +488,11 @@ local struct work {
     unsigned char *buf;         /* input */
     unsigned char *out;         /* space for output (guaranteed big enough) */
     z_stream strm;              /* pre-initialized z_stream */
+#ifndef NOTHREAD
     struct flag busy;           /* busy flag indicating work unit in use */
     pthread_t comp;             /* this compression thread */
+#endif
 } *jobs = NULL;
-
-/* busy flag values */
-#define IDLE 0          /* compress and writing done -- can start compress */
-#define COMP 1          /* compress -- input and output buffers in use */
-#define WRITE 2         /* compress done, writing output -- can read input */
-
-/* next and previous jobs[] indices */
-#define NEXT(n) ((n) == procs - 1 ? 0 : (n) + 1)
-#define PREV(n) ((n) == 0 ? procs - 1 : (n) - 1)
 
 /* set up the jobs[] work units -- full initialization of each unit is
    deferred until the unit is actually needed, also make sure that
@@ -462,7 +510,9 @@ local void jobs_new(void)
         bail("not enough memory", "");
     for (n = 0; n < procs; n++) {
         jobs[n].buf = NULL;
+#ifndef NOTHREAD
         flag_init(&(jobs[n].busy), IDLE);
+#endif
     }
 }
 
@@ -499,9 +549,12 @@ local void jobs_free(void)
             free(jobs[n].out);
             free(jobs[n].buf);
         }
+#ifndef NOTHREAD
         flag_done(&(jobs[n].busy));
+#endif
     }
     free(jobs);
+    jobs = NULL;
 }
 
 /* sliding dictionary size for deflate */
@@ -510,6 +563,28 @@ local void jobs_free(void)
 /* largest power of 2 that fits in an unsigned int -- used to limit requests
    to zlib functions that use unsigned int lengths */
 #define MAX ((((unsigned)-1) >> 1) + 1)
+
+/* put a 4-byte integer into a byte array in LSB order */
+#define PUT4(a,b) (*(a)=(b),(a)[1]=(b)>>8,(a)[2]=(b)>>16,(a)[3]=(b)>>24)
+
+/* write a gzip header using the information in the global descriptors */
+local void header(void)
+{
+    unsigned char head[10];
+
+    head[0] = 31;
+    head[1] = 139;
+    head[2] = 8;                    /* deflate */
+    head[3] = name != NULL ? 8 : 0;
+    PUT4(head + 4, mtime);
+    head[8] = level == 9 ? 2 : (level == 1 ? 4 : 0);
+    head[9] = 3;                    /* unix */
+    writen(outd, head, 10);
+    if (name != NULL)
+        writen(outd, (unsigned char *)name, strlen(name) + 1);
+}
+
+#ifndef NOTHREAD
 
 /* compress thread: compress the input in the provided work unit and compute
    its crc -- assume that the amount of space at job->out is guaranteed to be
@@ -538,7 +613,7 @@ local void *compress_thread(void *arg)
        compressing something (the read thread assures that the dictionary
        data in the previous work unit is still there) */
     prev = jobs + PREV(job - jobs);
-    if (prev->buf != NULL && len != 0)
+    if (dict && prev->buf != NULL && len != 0)
         deflateSetDictionary(strm, prev->buf + (size - DICT), DICT);
 
     /* run MAX-sized amounts of input through deflate and crc32 -- this loop
@@ -568,9 +643,6 @@ local void *compress_thread(void *arg)
     return NULL;
 }
 
-/* put a 4-byte integer into a byte array in LSB order */
-#define PUT4(a,b) (*(a)=(b),(a)[1]=(b)>>8,(a)[2]=(b)>>16,(a)[3]=(b)>>24)
-
 /* write thread: wait for compression threads to complete, write output in
    order, also write gzip header and trailer around the compressed data */
 local void *write_thread(void *arg)
@@ -579,20 +651,11 @@ local void *write_thread(void *arg)
     size_t len;                     /* length of input processed */
     unsigned long tot;              /* total uncompressed size (overflow ok) */
     unsigned long crc;              /* CRC-32 of uncompressed data */
-    unsigned char wrap[10];         /* gzip header or trailer */
+    unsigned char tail[10];         /* last deflate block and gzip trailer */
 
     /* build and write gzip header */
     Trace(("-- write thread running"));
-    wrap[0] = 31;
-    wrap[1] = 139;
-    wrap[2] = 8;                    /* deflate */
-    wrap[3] = name != NULL ? 8 : 0;
-    PUT4(wrap + 4, mtime);
-    wrap[8] = level == 9 ? 2 : (level == 1 ? 4 : 0);
-    wrap[9] = 3;                    /* unix */
-    writen(outd, wrap, 10);
-    if (name != NULL)
-        writen(outd, (unsigned char *)name, strlen(name) + 1);
+    header();
 
     /* process output of compress threads until end of input */    
     tot = 0;
@@ -627,10 +690,10 @@ local void *write_thread(void *arg)
     } while (len == size);
 
     /* write final static block and gzip trailer (crc and len mod 2^32) */
-    wrap[0] = 3;  wrap[1] = 0;
-    PUT4(wrap + 2, crc);
-    PUT4(wrap + 6, tot);
-    writen(outd, wrap, 10);
+    tail[0] = 3;  tail[1] = 0;
+    PUT4(tail + 2, crc);
+    PUT4(tail + 6, tot);
+    writen(outd, tail, 10);
     return NULL;
 }
 
@@ -693,6 +756,70 @@ local void read_thread(void)
 
     /* done -- release attribute */
     pthread_attr_destroy(&attr);
+}
+
+#endif
+
+/* do a simple gzip in a single thread from ind to outd */
+local void single_gzip(void)
+{
+    size_t got;                     /* amount read */
+    unsigned long tot;              /* total uncompressed size (overflow ok) */
+    unsigned long crc;              /* CRC-32 of uncompressed data */
+    unsigned char tail[8];          /* gzip trailer */
+    z_stream *strm;                 /* convenient pointer */
+
+    /* write gzip header */
+    header();
+
+    /* if first time, initialize buffers and deflate */
+    jobs_new();
+    if (jobs->buf == NULL)
+        job_init(jobs);
+
+    /* do raw deflate and calculate crc */
+    strm = &(jobs->strm);
+    (void)deflateReset(strm);
+    tot = 0;
+    crc = crc32(0L, Z_NULL, 0);
+    do {
+        /* read some data to compress */
+        got = readn(ind, jobs->buf, size);
+        tot += (unsigned long)got;
+        strm->next_in = jobs->buf;
+
+        /* compress MAX-size chunks in case unsigned type is small */
+        while (got > MAX) {
+            strm->avail_in = MAX;
+            crc = crc32(crc, strm->next_in, strm->avail_in);
+            do {
+                strm->avail_out = size;
+                strm->next_out = jobs->out;
+                (void)deflate(strm, Z_NO_FLUSH);
+                writen(outd, jobs->out, size - strm->avail_out);
+            } while (strm->avail_out == 0);
+            got -= MAX;
+        }
+
+        /* compress the remainder, finishing if end of input */
+        if (got)
+            crc = crc32(crc, strm->next_in, got);
+        strm->avail_in = got;
+        do {
+            strm->avail_out = size;
+            strm->next_out = jobs->out;
+            (void)deflate(strm, got < size ? Z_FINISH :
+                            (dict ? Z_NO_FLUSH : Z_FULL_FLUSH));
+            writen(outd, jobs->out, size - strm->avail_out);
+        } while (strm->avail_out == 0);
+
+        /* do until read doesn't fill buffer */
+    } while (got == size);
+
+    /* write gzip trailer */
+    PUT4(tail, crc);
+    PUT4(tail + 4, tot);
+    writen(outd, tail, 8);
 }
 
 /* defines for listgz() */
@@ -1135,13 +1262,18 @@ local void gzip(char *path)
     /* compress ind to outd */
     if (verbosity > 1)
         fprintf(stderr, "%s to %s ", in, out);
-    read_thread();
+#ifndef NOTHREAD
+    if (procs > 1)
+        read_thread();
+    else
+#endif
+        single_gzip();
     if (verbosity > 1) {
         putc('\n', stderr);
         fflush(stderr);
     }
 
-    /* finish up, set times */
+    /* finish up, set times, delete original */
     if (outd != 1 && mtime)
         touch(out, mtime);
     if (outd != 1 && close(outd))
@@ -1150,7 +1282,7 @@ local void gzip(char *path)
     out = NULL;
     if (ind != 0) {
         close(ind);
-        if (!keep)
+        if (outd != 1 && !keep)
             unlink(in);
     }
 }
@@ -1158,13 +1290,20 @@ local void gzip(char *path)
 local char *helptext[] = {
 "Usage: pigz [options] [files ...]",
 "  will compress files in place, adding the suffix '.gz'.  If no files are",
+#ifdef NOTHREAD
+"  specified, stdin will be compressed to stdout.  pigz does what gzip does.",
+#else
 "  specified, stdin will be compressed to stdout.  pigz does what gzip does,",
 "  but spreads the work over multiple processors and cores when compressing.",
+#endif
 "",
 "Options:",
 "  -0 to -9, --fast, --best   Compression levels, --fast is -1, --best is -9",
-"  -b, --blocksize nnn  Set block size per thread to nnnK (default 128K)",
-"  -p, --processes nnn  Allow up to nnn compression threads (default 32)",
+"  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
+#ifndef NOTHREAD
+"  -p, --processes n    Allow up to n compression threads (default 32)",
+#endif
+"  -i, --independent    Compress blocks independently for damage recovery",
 "  -f, --force          Force overwrite, compressing .gz, links, to terminal",
 "  -r, --recursive      Compress (or list) the contents of all subdirectories",
 "  -s, --suffix .sss    Use suffix .sss instead of .gz",
@@ -1175,12 +1314,10 @@ local char *helptext[] = {
 "  -T, --no-time        Do not put modification time in gzip header",
 "  -l, --list           List contents of input files instead of compressing",
 "  -q, --quiet          Print no messages, even on error",
-"  -v, --verbose        Provide more verbose output (-vv to debug)",
-"  -h, --help           Display this help",
-"  -L, --license        Display software license",
-"  -V, --version        Display version number"
+"  -v, --verbose        Provide more verbose output (-vv to debug)"
 };
 
+/* display the help text above */
 local void help(void)
 {
     int n;
@@ -1202,8 +1339,13 @@ local void defaults(void)
        memory -- the memory usage for these settings and full use of all work
        units (at least 4 MB of input) is 16.2 MB */
     level = Z_DEFAULT_COMPRESSION;
+#ifdef NOTHREAD
+    procs = 1;
+#else
     procs = 32;
+#endif
     size = 131072UL;
+    dict = 1;                       /* initialize dictionary each thread */
     verbosity = 1;                  /* normal message level */
     headis = 3;                     /* store name and timestamp */
     pipeout = 0;                    /* don't force output to stdout */
@@ -1218,11 +1360,11 @@ local void defaults(void)
 local char *longopts[][2] = {
     {"LZW", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
     {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"force", "f"},
-    {"help", "h"}, {"keep", "k"}, {"license", "L"}, {"list", "l"},
-    {"name", "N"}, {"no-name", "n"}, {"no-time", "T"}, {"processes", "p"},
-    {"quiet", "q"}, {"recursive", "r"}, {"silent", "q"}, {"stdout", "c"},
-    {"suffix", "s"}, {"test", "t"}, {"to-stdout", "c"}, {"uncompress", "d"},
-    {"verbose", "v"}, {"version", "V"}};
+    {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
+    {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "T"},
+    {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"silent", "q"},
+    {"stdout", "c"}, {"suffix", "s"}, {"test", "t"}, {"to-stdout", "c"},
+    {"uncompress", "d"}, {"verbose", "v"}, {"version", "V"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
 /* process an option, return true if a file name and not an option */
@@ -1263,7 +1405,7 @@ local int option(char *arg)
                 level = *arg - '0';
                 break;
             case 'L':
-                fputs("pigz 1.3\n", stderr);
+                fputs(VERSION, stderr);
                 fputs("Copyright (C) 2007 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
@@ -1271,7 +1413,7 @@ local int option(char *arg)
                 exit(0);
             case 'N':  headis = 3;  break;
             case 'T':  headis &= ~2;  break;
-            case 'V':  fputs("pigz 1.3\n", stderr);  exit(0);
+            case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
                 bail("invalid option: LZW not supported", "");
             case 'a':
@@ -1283,6 +1425,7 @@ local int option(char *arg)
                 bail("invalid option: decompression not supported", "");
             case 'f':  force = 1;  break;
             case 'h':  help();  break;
+            case 'i':  dict = 0;  break;
             case 'k':  keep = 1;  break;
             case 'l':  list = 1;  break;
             case 'n':  headis = 0;  break;
@@ -1307,14 +1450,20 @@ local int option(char *arg)
                  get == 3 ? "-b and -p" :
                             (get == 5 ? "-b and -s" : "-p and -s"));
         if (get == 1) {
+            jobs_free();
             size = (size_t)(atol(arg)) << 10;   /* chunk size */
             if (size < DICT)
                 bail("block size too small (must be >= 32K)", "");
         }
         else if (get == 2) {
+            jobs_free();
             procs = atoi(arg);                  /* # processes */
-            if (procs < 2)
-                bail("need at least two processes", "");
+            if (procs < 1)
+                bail("need at least one process", "");
+#ifdef NOTHREAD
+            if (procs > 1)
+                bail("this pigz compiled without threads", "");
+#endif
         }
         else if (get == 4)
             sufx = arg;                         /* gz suffix */
