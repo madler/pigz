@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007 Mark Adler
- * Version 1.1  28 January 2007  Mark Adler
+ * Version 1.21  1 February 2007  Mark Adler
  */
 
 /* Version history:
@@ -11,14 +11,16 @@
                      Completely rewrite parallelism -- add a write thread
                      Use deflateSetDictionary() to make use of history
                      Tune argument defaults to best performance on four cores
+   1.21   1 Feb 2007 Add long command line options, add all gzip options
+                     Add debugging options
  */
 
 /*
    pigz compresses from stdin to stdout using threads to make use of multiple
    processors and cores.  The input is broken up into 128 KB chunks, and each
    is compressed separately.  The CRC for each chunk is also calculated
-   separately.  The compressed chunks are written in order to the output,
-   and the overall CRC is calculated from the CRC's of the chunks.
+   separately.  The compressed chunks are written in order to the output, and
+   the overall CRC is calculated from the CRC's of the chunks.
 
    The compressed data format generated is the gzip format using the deflate
    compression method.  First a gzip header is written, followed by raw deflate
@@ -163,6 +165,10 @@ struct work {
 /* read-only globals (set by main/read thread before others started) */
 local int ind;              /* input file descriptor */
 local int outd;             /* output file descriptor */
+local int verbosity;        /* 0 = quiet, 1 = normal, 2 = verbose %% */
+local int storename;        /* true to store file name and time in header %% */
+local int outstd;           /* write output to stdout even if file %% */
+local char *suffix;         /* suffix to use (.gz or user supplied) %% */
 local int level;            /* compression level */
 local int procs;            /* number of compression threads (>= 2) */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
@@ -191,6 +197,10 @@ local void *compress_thread(void *arg)
     struct work *prev;              /* previous work unit */
     struct work *job = arg;         /* work unit for this thread */
     z_stream *strm = &(job->strm);  /* zlib stream for this work unit */
+
+    /* debugging */
+    if (verbosity == 3)
+        fprintf(stderr, "-- compressing %d\n", job - jobs);
 
     /* reset state for a new compressed stream */
     (void)deflateReset(strm);
@@ -264,11 +274,19 @@ local void *write_thread(void *arg)
         /* now that compress is done, allow read thread to use input buffer */
         flag_set(&(jobs[n].busy), WRITE);
 
+        /* debugging */
+        if (verbosity == 3)
+            fprintf(stderr, "-- writing %d\n", n);
+
         /* write compressed data and update length and crc */
         writen(outd, jobs[n].out, jobs[n].strm.next_out - jobs[n].out);
         len = jobs[n].len;
         tot += len;
         crc = crc32_combine(crc, jobs[n].crc, len);
+
+        /* debugging */
+        if (verbosity == 3)
+            fprintf(stderr, "-- releasing %d\n", n);
 
         /* release this work unit and go to the next work unit */
         flag_set(&(jobs[n].busy), IDLE);
@@ -292,6 +310,10 @@ local void *write_thread(void *arg)
 local void job_init(struct work *job)
 {
     int ret;                        /* deflateInit2() return value */
+
+    /* debugging */
+    if (verbosity == 3)
+        fprintf(stderr, "-- initializing %d\n", job - jobs);
 
     job->buf = malloc(size);
     job->out = malloc(size + (size >> 11) + 10);
@@ -349,6 +371,10 @@ local void read_thread(void)
         flag_wait_not(&(jobs[NEXT(n)].busy), COMP);
         got = readn(ind, jobs[n].buf, size);
 
+        /* debugging */
+        if (verbosity == 3)
+            fprintf(stderr, "-- have read %d\n", n);
+
         /* start compress thread, but wait for write to be done first */
         flag_wait(&(jobs[n].busy), IDLE);
         jobs[n].len = got;
@@ -368,6 +394,10 @@ local void read_thread(void)
        complete */
     pthread_join(write, NULL);
 
+    /* debugging */
+    if (verbosity == 3)
+        fprintf(stderr, "-- all threads joined\n");
+
     /* free up all requested resources and return */
     for (n = procs - 1; n >= 0; n--) {
         flag_done(&(jobs[n].busy));
@@ -378,6 +408,8 @@ local void read_thread(void)
     free(jobs);
     pthread_attr_destroy(&attr);
 }
+
+#define ARGIS(s) (strcmp(arg, s) == 0)
 
 /* Process arguments for level, size, and procs, compress from stdin to
    stdout in the gzip format.  Note that procs must be at least two in
@@ -399,52 +431,133 @@ int main(int argc, char **argv)
     level = Z_DEFAULT_COMPRESSION;
     procs = 32;
     size = 131072UL;
+    ind = 0;
+    outd = 1;
+    verbosity = 1;
+    storename = 1;
+    outstd = 0;
+    suffix = ".gz";
 
     /* process command-line arguments */
     get = 0;
     for (n = 1; n < argc; n++) {
         arg = argv[n];
         if (*arg == '-') {
-            while (*++arg)
-                if (*arg >= '0' && *arg <= '9')     /* compression level */
+            if (get)
+                bail("require parameter after -b, -p, or -s");
+            arg++;
+            if (*arg == '-') {                    /* long arguments */
+                arg++;
+                if (ARGIS("ascii"))
+                    arg = "a";
+                else if (ARGIS("best"))
+                    arg = "9";
+                else if (ARGIS("blocksize"))
+                    arg = "b";
+                else if (ARGIS("decompress") || ARGIS("uncompress"))
+                    arg = "d";
+                else if (ARGIS("fast"))
+                    arg = "1";
+                else if (ARGIS("force"))
+                    arg = "f";
+                else if (ARGIS("help"))
+                    arg = "h";
+                else if (ARGIS("list"))
+                    arg = "l";
+                else if (ARGIS("license"))
+                    arg = "L";
+                else if (ARGIS("no-name"))
+                    arg = "n";
+                else if (ARGIS("name"))
+                    arg = "N";
+                else if (ARGIS("processes"))
+                    arg = "p";
+                else if (ARGIS("quiet"))
+                    arg = "q";
+                else if (ARGIS("recursive"))
+                    arg = "r";
+                else if (ARGIS("stdout") || ARGIS("to-stdout"))
+                    arg = "c";
+                else if (ARGIS("suffix"))   /* %% also allow --suffix=.foo ? */
+                    arg = "s";
+                else if (ARGIS("test"))
+                    arg = "t";
+                else if (ARGIS("verbose"))
+                    arg = "v";
+                else if (ARGIS("version"))
+                    arg = "V";
+                else
+                    bail("invalid option");
+            }
+            while (*arg) {                          /* short arguments */
+                switch (*arg) {
+                case '0': case '1': case '2': case '3': case '4':
+                case '5': case '6': case '7': case '8': case '9':
                     level = *arg - '0';
-                else if (*arg == 'b')               /* chunk size in K */
-                    get |= 1;
-                else if (*arg == 'p')               /* number of processes */
-                    get |= 2;
-                else if (*arg == 'h') {             /* help */
+                    break;
+                case 'L':
+                    fputs("pigz 1.21\n", stderr);
+                    fputs("Copyright (C) 2007 Mark Adler\n", stderr);
+                    fputs("Subject to the terms of the zlib license.\n",
+                          stderr);
+                    fputs("No warranty is provided or implied.\n", stderr);
+                    return 0;
+                    break;
+                case 'N':  storename = 1;  break;
+                case 'V':
+                    fputs("pigz 1.21\n", stderr);
+                    return 0;
+                    break;
+                case 'a':  bail("invalid option: pigz does not convert ascii");
+                case 'b':  get |= 1;  break;
+                case 'c':  outstd = 1;  break;
+                case 'd':  bail("invalid option: pigz cannot decompress");
+                case 'f':  /* %% force compression on links */  break;
+                case 'h':
                     fputs("usage: pigz [-0..9] [-b blocksizeinK]", stderr);
                     fputs(" [-p processes] < foo > foo.gz\n", stderr);
                     return 0;
-                }
-                else
+                case 'l':  /* %% list contents */  return 0;
+                case 'n':  storename = 0;  break;
+                case 'p':  get |= 2;  break;
+                case 'q':  verbosity = 0;  break;
+                case 'r':  /* %% recursive */  break;
+                case 's':  get |= 4;  break;
+                case 't':  bail("invalid option: pigz cannot test");
+                case 'v':  verbosity++;  break;
+                default:
                     bail("invalid option");
+                }
+                arg++;
+            }
         }
-        else if (get & 1) {
-            if (get & 2)
-                bail("you need to separate the -b and -p options");
-            size = (size_t)(atol(arg)) << 10;       /* chunk size */
-            if (size < DICT)
-                bail("invalid option");
+        else if (get) {
+            if (get != 1 && get != 2 && get != 4)
+                bail("you need to separate the -b, -p, and -s options");
+            if (get == 1) {
+                size = (size_t)(atol(arg)) << 10;   /* chunk size */
+                if (size < DICT)
+                    bail("invalid option");
+            }
+            else if (get == 2) {
+                procs = atoi(arg);                  /* # processes */
+                if (procs < 2)
+                    bail("invalid option");
+            }
+            else if (get == 4) {
+                suffix = arg;                       /* gz suffix */
+            }
             get = 0;
         }
-        else if (get & 2) {
-            procs = atoi(arg);                      /* processes */
-            if (procs < 2)
-                bail("invalid option");
-            get = 0;
-        }
-        else
+        else    /* %% file name */
             bail("invalid option (you need to pipe input and output)");
     }
     if (get)
         bail("missing option argument");
 
-    /* do parallel compression from stdin to stdout (the read thread starts up
+    /* do parallel compression from ind to outd (the read thread starts up
        the write thread and the compression threads, and they all join before
        the read thread returns) */
-    ind = 0;
-    outd = 1;
     read_thread();
 
     /* done */
