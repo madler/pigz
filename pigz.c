@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007, 2008, 2009 Mark Adler
- * Version 2.1.5  20 Jul 2009  Mark Adler
+ * Copyright (C) 2007, 2008, 2009, 2010 Mark Adler
+ * Version 2.1.6  17 Jan 2010  Mark Adler
  */
 
 /*
@@ -100,9 +100,15 @@
                        Fix --suffix short option to be -S to match gzip [Bloch]
                        Decompress if executable named "unpigz" [Amundsen]
                        Add a little bit of testing to Makefile
+   2.1.6  17 Jan 2010  Added pigz.spec to distribution for RPM systems [Brown]
+                       Avoid some compiler warnings
+                       Process symbolic links if piping to stdout [Hoffstätte]
+                       Decompress if executable named "gunzip" [Hoffstätte]
+                       Allow ".tgz" suffix [Chernookiy]
+                       Fix adler32 comparison on .zz files
  */
 
-#define VERSION "pigz 2.1.5\n"
+#define VERSION "pigz 2.1.6\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -264,6 +270,7 @@
 
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
+                           inflateBackInit(), inflateBack(), inflateBackEnd(),
                            Z_DEFAULT_COMPRESSION, Z_DEFAULT_STRATEGY,
                            Z_DEFLATED, Z_NO_FLUSH, Z_NULL, Z_OK,
                            Z_SYNC_FLUSH, z_stream */
@@ -1035,6 +1042,8 @@ local void compress_thread(void *dummy)
     size_t len;                     /* remaining bytes to compress/check */
     z_stream strm;                  /* deflate stream */
 
+    (void)dummy;
+
     /* initialize the deflate stream for this thread */
     strm.zfree = Z_NULL;
     strm.zalloc = Z_NULL;
@@ -1156,6 +1165,8 @@ local void write_thread(void *dummy)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
+
+    (void)dummy;
 
     /* build and write header */
     Trace(("-- write thread running"));
@@ -1417,6 +1428,8 @@ local thread *load_thread;          /* load_read() thread for joining */
 local void load_read(void *dummy)
 {
     size_t len;
+
+    (void)dummy;
 
     Trace(("-- launched decompress read thread"));
     do {
@@ -1726,7 +1739,7 @@ local int get_header(int save)
             if (in_left == 0 && load() == 0)
                 return -3;
             end = memchr(in_next, 0, in_left);
-            copy = end == NULL ? in_left : (end - in_next) + 1;
+            copy = end == NULL ? in_left : (size_t)(end - in_next) + 1;
             if (have + copy > size) {
                 while (have + copy > (size <<= 1))
                     ;
@@ -1770,7 +1783,8 @@ local size_t compressed_suffix(char *nm)
     if (len > 4) {
         nm += len - 4;
         len = 4;
-        if (strcmp(nm, ".zip") == 0 || strcmp(nm, ".ZIP") == 0)
+        if (strcmp(nm, ".zip") == 0 || strcmp(nm, ".ZIP") == 0 ||
+            strcmp(nm, ".tgz") == 0)
             return 4;
     }
     if (len > 3) {
@@ -1796,7 +1810,7 @@ local size_t compressed_suffix(char *nm)
 /* print gzip or lzw file information */
 local void show_info(int method, unsigned long check, off_t len, int cont)
 {
-    int max;                /* maximum name length for current verbosity */
+    size_t max;             /* maximum name length for current verbosity */
     size_t n;               /* name length without suffix */
     time_t now;             /* for getting current year */
     char mod[26];           /* modification time in text */
@@ -1991,6 +2005,7 @@ local void list_info(void)
 /* call-back input function for inflateBack() */
 local unsigned inb(void *desc, unsigned char **buf)
 {
+    (void)desc;
     load();
     *buf = in_next;
     return in_left;
@@ -2014,6 +2029,8 @@ local void outb_write(void *dummy)
 {
     size_t len;
 
+    (void)dummy;
+
     Trace(("-- launched decompress write thread"));
     do {
         possess(outb_write_more);
@@ -2031,6 +2048,8 @@ local void outb_write(void *dummy)
 local void outb_check(void *dummy)
 {
     size_t len;
+
+    (void)dummy;
 
     Trace(("-- launched decompress check thread"));
     do {
@@ -2053,6 +2072,8 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
 {
 #ifndef NOTHREAD
     static thread *wr, *ch;
+
+    (void)desc;
 
     if (procs > 1) {
         /* if first time, initialize state and launch threads */
@@ -2165,7 +2186,7 @@ local void infchk(void)
                 /* if second length doesn't match, try 64-bit lengths */
                 if (zip_ulen != (out_tot & LOW32)) {
                     zip_ulen = GET4();
-                    GET4();
+                    (void)GET4();
                 }
                 if (in_eof)
                     bail("corrupted zip entry -- missing trailer: ", in);
@@ -2175,8 +2196,8 @@ local void infchk(void)
             check = zip_crc;
         }
         else if (form == 1) {       /* zlib (big-endian) trailer */
-            check = GET() << 24;
-            check += GET() << 16;
+            check = (unsigned long)(GET()) << 24;
+            check += (unsigned long)(GET()) << 16;
             check += GET() << 8;
             check += GET();
             if (in_eof)
@@ -2244,7 +2265,7 @@ unsigned char match[65280 + 2];         /* buffer for reversed match */
 local void unlzw(void)
 {
     int got;                    /* byte just read by GET() */
-    int chunk;                  /* bytes left in current chunk */
+    unsigned chunk;             /* bytes left in current chunk */
     int left;                   /* bits left in rem */
     unsigned rem;               /* unused bits from input */
     int bits;                   /* current bits per code */
@@ -2498,7 +2519,7 @@ local void process(char *path)
                         in);
             return;
         }
-        if ((st.st_mode & S_IFMT) == S_IFLNK && !force) {
+        if ((st.st_mode & S_IFMT) == S_IFLNK && !force && !pipeout) {
             if (verbosity > 0)
                 fprintf(stderr, "%s is a symbolic link -- skipping\n", in);
             return;
@@ -2553,8 +2574,8 @@ local void process(char *path)
 
             /* run process() for each entry in the directory */
             cut = base = in + strlen(in);
-            if (base > in && base[-1] != '/') {
-                if (base - in >= sizeof(in))
+            if (base > in && base[-1] != (unsigned char)'/') {
+                if ((size_t)(base - in) >= sizeof(in))
                     bail("path too long", in);
                 *base++ = '/';
             }
@@ -2802,7 +2823,7 @@ local void help(void)
 
     if (verbosity == 0)
         return;
-    for (n = 0; n < sizeof(helptext) / sizeof(char *); n++)
+    for (n = 0; n < (int)(sizeof(helptext) / sizeof(char *)); n++)
         fprintf(stderr, "%s\n", helptext[n]);
     fflush(stderr);
     exit(0);
@@ -2944,7 +2965,8 @@ local int option(char *arg)
             case 'K':  form = 2;  sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007, 2008, 2009 Mark Adler\n", stderr);
+                fputs("Copyright (C) 2007, 2008, 2009, 2010 Mark Adler\n",
+                      stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
@@ -3002,7 +3024,7 @@ local int option(char *arg)
             procs = (int)n;                     /* # processes */
             if (procs < 1)
                 bail("invalid number of processes: ", arg);
-            if (procs != n || ((procs << 1) + 2) < 1)
+            if ((size_t)procs != n || ((procs << 1) + 2) < 1)
                 bail("too many processes: ", arg);
 #ifdef NOTHREAD
             if (procs > 1)
@@ -3023,6 +3045,7 @@ local int option(char *arg)
 /* catch termination signal */
 local void cut_short(int sig)
 {
+    (void)sig;
     Trace(("termination by user"));
     if (outd != -1 && out != NULL)
         unlink(out);
@@ -3075,9 +3098,10 @@ int main(int argc, char **argv)
     if (argc < 2 && isatty(1))
         help();
 
-    /* decompress if named "unpigz" */
+    /* decompress if named "unpigz" or "gunzip" */
     p = strrchr(argv[0], '/');
-    if (strcmp(p == NULL ? argv[0] : p + 1, "unpigz") == 0)
+    p = p == NULL ? argv[0] : p + 1;
+    if (strcmp(p, "unpigz") == 0 || strcmp(p, "gunzip") == 0)
         decode = 1, headis = 0;
 
     /* process command-line arguments */
