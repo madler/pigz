@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007 Mark Adler
- * Version 1.7  29 April 2007  Mark Adler
+ * Version 1.8  13 May 2007  Mark Adler
  */
 
 /*
@@ -67,9 +67,10 @@
                        Warn about trailing junk for gzip and zlib streams
                        Make listings consistent, ignore gzip extra flags
                        Add zip stream compression (--zip)
+   1.8    13 May 2007  Document --zip option in help output
  */
 
-#define VERSION "pigz 1.7\n"
+#define VERSION "pigz 1.8\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min block size]
@@ -2013,7 +2014,7 @@ local void process(char *path)
             struct dirent *next;
 
             /* accumulate list of entries (need to do this, since readdir()
-               behavior not defined if changing the directory between calls) */
+               behavior not defined if directory modified between calls) */
             here = opendir(in);
             if (here == NULL)
                 return;
@@ -2277,6 +2278,7 @@ local char *helptext[] = {
 "  -r, --recursive      Process the contents of all subdirectories",
 "  -s, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
 "  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
+"  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -k, --keep           Do not delete original file after processing",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
 "  -N, --name           Store/restore file name and mod time in/from header",
