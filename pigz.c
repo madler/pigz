@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008 Mark Adler
- * Version 2.1.3  8 Nov 2008  Mark Adler
+ * Version 2.1.4  9 Nov 2008  Mark Adler
  */
 
 /*
@@ -91,9 +91,10 @@
                        Update for yarn 1.1 (yarn_prefix and yarn_abort)
    2.1.2  30 Oct 2008  Work around use of beta zlib in production systems
    2.1.3   8 Nov 2008  Don't use zlib combination routines, put back in pigz
+   2.1.4   9 Nov 2008  Fix bug when decompressing very short files
  */
 
-#define VERSION "pigz 2.1.3\n"
+#define VERSION "pigz 2.1.4\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
@@ -1040,7 +1041,7 @@ local void compress_thread(void *dummy)
         /* got a job -- initialize and set the compression level (note that if
            deflateParams() is called immediately after deflateReset(), there is
            no need to initialize the input/output for the stream) */
-        Trace(("-- compressing %ld", job->seq));
+        Trace(("-- compressing #%ld", job->seq));
         (void)deflateReset(&strm);
         (void)deflateParams(&strm, level, Z_DEFAULT_STRATEGY);
 
@@ -1080,7 +1081,7 @@ local void compress_thread(void *dummy)
         (void)deflate(&strm, job->more ? Z_SYNC_FLUSH :  Z_FINISH);
         assert(strm.avail_in == 0 && strm.avail_out != 0);
         job->out->len = strm.next_out - (unsigned char *)(job->out->buf);
-        Trace(("-- compressed %ld%s", job->seq, job->more ? "" : " (last)"));
+        Trace(("-- compressed #%ld%s", job->seq, job->more ? "" : " (last)"));
 
         /* reserve input buffer until check value has been calculated */
         use_space(job->in);
@@ -1113,7 +1114,7 @@ local void compress_thread(void *dummy)
         job->check = check;
         possess(job->calc);
         twist(job->calc, TO, 1);
-        Trace(("-- checked %ld%s", job->seq, job->more ? "" : " (last)"));
+        Trace(("-- checked #%ld%s", job->seq, job->more ? "" : " (last)"));
 
         /* done with that one -- go find another job */
     }
@@ -1161,10 +1162,10 @@ local void write_thread(void *dummy)
         clen += (unsigned long)(job->out->len);
 
         /* write the compressed data and drop the output buffer */
-        Trace(("-- writing %ld", seq));
+        Trace(("-- writing #%ld", seq));
         writen(outd, job->out->buf, job->out->len);
         drop_space(job->out);
-        Trace(("-- wrote %ld%s", seq, more ? "" : " (last)"));
+        Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
 
         /* wait for check calculation to complete, then combine, once
            the compress thread is done with the input, release it */
@@ -1242,7 +1243,7 @@ local void parallel_compress(void)
             }
         }
         job->more = more;
-        Trace(("-- read %ld%s", seq, more ? "" : " (last)"));
+        Trace(("-- read #%ld%s", seq, more ? "" : " (last)"));
         if (++seq < 1)
             bail("input too long: ", in);
 
@@ -1428,24 +1429,25 @@ local size_t load(void)
     /* if first time in or procs == 1, read a buffer to have something to
        return, otherwise wait for the previous read job to complete */
     if (procs > 1) {
+        /* if first time, fire up the read thread, ask for a read */
         if (in_which == -1) {
             in_which = 1;
-            in_len = readn(ind, in_buf, BUF);
-            load_state = new_lock(0);
+            load_state = new_lock(1);
             load_thread = launch(load_read, NULL);
         }
-        else {
-            possess(load_state);
-            wait_for(load_state, TO_BE, 0);
-            release(load_state);
-        }
 
-        /* return the data just read */
+        /* wait for the previously requested read to complete */
+        possess(load_state);
+        wait_for(load_state, TO_BE, 0);
+        release(load_state);
+
+        /* set up input buffer with the data just read */
         in_next = in_which ? in_buf : in_buf2;
         in_left = in_len;
 
-        /* if not at end of file, alert read thread to load next buffer */
-        if (in_left == BUF) {
+        /* if not at end of file, alert read thread to load next buffer,
+           alternate between in_buf and in_buf2 */
+        if (in_len == BUF) {
             in_which = 1 - in_which;
             possess(load_state);
             twist(load_state, TO, 1);
@@ -1460,8 +1462,10 @@ local size_t load(void)
     }
     else
 #endif
-        /* simply read a buffer */
+    {
+        /* don't use threads -- simply read a buffer into in_buf */
         in_left = readn(ind, in_next = in_buf, BUF);
+    }
 
     /* note end of file */
     if (in_left < BUF) {
