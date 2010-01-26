@@ -267,7 +267,7 @@
                         /* O_WRONLY */
 #include <dirent.h>     /* opendir(), readdir(), closedir(), DIR, */
                         /* struct dirent */
-#include <limits.h>     /* PATH_MAX */
+#include <limits.h>     /* PATH_MAX, UINT_MAX */
 
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
@@ -538,7 +538,7 @@ local void writen(int desc, unsigned char *buf, size_t len)
 
 /* largest power of 2 that fits in an unsigned int -- used to limit requests
    to zlib functions that use unsigned int lengths */
-#define MAX ((((unsigned)0 - 1) >> 1) + 1)
+#define MAX (UINT_MAX - (UINT_MAX >> 1))
 
 /* convert Unix time to MS-DOS date and time, assuming current timezone
    (you got a better idea?) */
@@ -1097,7 +1097,7 @@ local void compress_thread(void *dummy)
         len = job->in->len;
         while (len > MAX) {
             strm.avail_in = MAX;
-            strm.avail_out = (unsigned)-1;
+            strm.avail_out = UINT_MAX;
             (void)deflate(&strm, Z_NO_FLUSH);
             assert(strm.avail_in == 0 && strm.avail_out != 0);
             len -= MAX;
@@ -1106,7 +1106,7 @@ local void compress_thread(void *dummy)
         /* run the last piece through deflate -- terminate with a sync marker,
            or finish deflate stream if this is the last block */
         strm.avail_in = (unsigned)len;
-        strm.avail_out = (unsigned)-1;
+        strm.avail_out = UINT_MAX;
         (void)deflate(&strm, job->more ? Z_SYNC_FLUSH :  Z_FINISH);
         assert(strm.avail_in == 0 && strm.avail_out != 0);
         job->out->len = strm.next_out - (unsigned char *)(job->out->buf);
