@@ -106,16 +106,17 @@
                        Decompress if executable named "gunzip" [Hoffstätte]
                        Allow ".tgz" suffix [Chernookiy]
                        Fix adler32 comparison on .zz files
-   2.1.7  xx Feb 2010  --
+   2.1.7  xx Feb 2010  Avoid unused parameter warning in reenter()
+                       Don't assume 2's complement ints in compress_thread()
  */
 
 #define VERSION "pigz 2.1.7\n"
 
 /* To-do:
-    - add --rsyncable (or -R) [use my own algorithm, set min/max block size]
+    - add --rsyncable (or -R) [use a better algorithm than modified gzip]
     - make source portable for Windows, VMS, etc. (see gzip source code)
     - make build portable (currently good for Unixish)
-    - add bzip2 decompression
+    - add bzip2 decompression (using threads)
  */
 
 /*
