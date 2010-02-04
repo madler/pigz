@@ -108,6 +108,7 @@
                        Fix adler32 comparison on .zz files
    2.1.7  xx Feb 2010  Avoid unused parameter warning in reenter()
                        Don't assume 2's complement ints in compress_thread()
+                       Replicate gzip -cdf cat-like behavior
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -315,8 +316,9 @@ local int verbosity;        /* 0 = quiet, 1 = normal, 2 = verbose, 3 = trace */
 local int headis;           /* 1 to store name, 2 to store date, 3 both */
 local int pipeout;          /* write output to stdout even if file */
 local int keep;             /* true to prevent deletion of input file */
-local int force;            /* true to overwrite, compress links */
+local int force;            /* true to overwrite, compress links, cat */
 local int form;             /* gzip = 0, zlib = 1, zip = 2 or 3 */
+local unsigned char magic1; /* first byte of possible header when decoding */
 local int recurse;          /* true to dive down into directory structure */
 local char *sufx;           /* suffix to use (".gz" or user supplied) */
 local char *name;           /* name for gzip header */
@@ -1643,9 +1645,10 @@ local int get_header(int save)
 
     /* see if it's a gzip, zlib, or lzw file */
     form = 0;
-    magic = GET() << 8;
+    magic1 = GET();
     if (in_eof)
         return -1;
+    magic = magic1 << 8;
     magic += GET();
     if (in_eof)
         return -2;
@@ -1701,8 +1704,11 @@ local int get_header(int save)
         form = 2 + ((flags & 8) >> 3);
         return in_eof ? -3 : method;
     }
-    if (magic != 0x1f8b)            /* not gzip */
+    if (magic != 0x1f8b) {          /* not gzip */
+        in_left++;      /* unget second magic byte */
+        in_next--;
         return -2;
+    }
 
     /* it's gzip -- get method and flags */
     method = GET();
@@ -2002,6 +2008,25 @@ local void list_info(void)
     RELEASE(hname);
 }
 
+/* --- copy input to output (when acting like cat) --- */
+
+local void cat(void)
+{
+    /* write first magic byte (if we're here, there's at least one byte) */
+    writen(outd, &magic1, 1);
+    out_tot = 1;
+
+    /* copy the remainder of the input to the output (if there were any more
+       bytes of input, then in_left is non-zero and in_next is pointing to the
+       second magic byte) */
+    while (in_left) {
+        writen(outd, in_next, in_left);
+        out_tot += in_left;
+        in_left = 0;
+        load();
+    }
+}
+
 /* --- decompress deflate input --- */
 
 /* call-back input function for inflateBack() */
@@ -2228,7 +2253,11 @@ local void infchk(void)
         /* if a gzip or zlib entry follows a gzip or zlib entry, decompress it
            (don't replace saved header information from first entry) */
     } while (form < 2 && (ret = get_header(0)) == 8 && form < 2);
-    if (ret != -1 && form < 2)
+
+    /* gzip -cdf copies junk after gzip stream directly to output */
+    if (form < 2 && ret == -2 && force && pipeout && decode != 2 && !list)
+        cat();
+    else if (ret != -1 && form < 2)
         fprintf(stderr, "%s OK, has trailing junk which was ignored\n", in);
 }
 
@@ -2635,7 +2664,9 @@ local void process(char *path)
     if (decode) {
         in_init();
         method = get_header(1);
-        if (method != 8 && method != 256) {
+        if (method != 8 && method != 256 &&
+                /* gzip -cdf acts like cat on uncompressed input */
+                !(method == -2 && force && pipeout && decode != 2 && !list)) {
             RELEASE(hname);
             if (ind != 0)
                 close(ind);
@@ -2746,8 +2777,10 @@ local void process(char *path)
     if (decode) {
         if (method == 8)
             infchk();
-        else
+        else if (method == 256)
             unlzw();
+        else
+            cat();
     }
 #ifndef NOTHREAD
     else if (procs > 1)
