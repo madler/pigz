@@ -2954,7 +2954,7 @@ local int option(char *arg)
 
     /* if no argument or dash option, check status of get */
     if (get && (arg == NULL || *arg == '-')) {
-        bad[1] = "bps"[get - 1];
+        bad[1] = "bpS"[get - 1];
         bail("missing parameter after ", bad);
     }
     if (arg == NULL)
@@ -3040,7 +3040,7 @@ local int option(char *arg)
             return 0;
     }
 
-    /* process option parameter for -b, -p, or -s */
+    /* process option parameter for -b, -p, or -S */
     if (get) {
         size_t n;
 
