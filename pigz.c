@@ -109,6 +109,7 @@
    2.1.7  xx Feb 2010  Avoid unused parameter warning in reenter()
                        Don't assume 2's complement ints in compress_thread()
                        Replicate gzip -cdf cat-like behavior
+                       Replicate gzip -- option to suppress option decoding
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -3094,6 +3095,7 @@ local void cut_short(int sig)
 int main(int argc, char **argv)
 {
     int n;                          /* general index */
+    int noop;                       /* true to suppress option decoding */
     unsigned long done;             /* number of named files processed */
     char *opts, *p;                 /* environment default options, marker */
 
@@ -3139,10 +3141,14 @@ int main(int argc, char **argv)
     if (strcmp(p, "unpigz") == 0 || strcmp(p, "gunzip") == 0)
         decode = 1, headis = 0;
 
-    /* process command-line arguments */
-    done = 0;
+    /* process command-line arguments, no options after "--" */
+    done = noop = 0;
     for (n = 1; n < argc; n++)
-        if (option(argv[n])) {          /* true if file name, process it */
+        if (noop == 0 && strcmp(argv[n], "--") == 0) {
+            noop = 1;
+            option(NULL);
+        }
+        else if (noop || option(argv[n])) { /* true if file name, process it */
             if (done == 1 && pipeout && !decode && !list && form > 1) {
                 fprintf(stderr, "warning: output is concatenated zip files ");
                 fprintf(stderr, "-- pigz will not be able to extract\n");
