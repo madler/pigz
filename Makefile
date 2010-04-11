@@ -31,13 +31,13 @@ test: pigz
 	./pigz -kfp 1 pigz.c ; ./pigz -t pigz.c.gz
 	./pigz -kfz pigz.c ; ./pigz -t pigz.c.zz
 	./pigz -kfK pigz.c ; ./pigz -t pigz.c.zip
-	printf "" | ./pigz -cdf | wc -c
-	printf "x" | ./pigz -cdf | wc -c
-	printf "xy" | ./pigz -cdf | wc -c
-	printf "xyz" | ./pigz -cdf | wc -c
-	(printf "w" | gzip ; printf "x") | ./pigz -cdf | wc -c
-	(printf "w" | gzip ; printf "xy") | ./pigz -cdf | wc -c
-	(printf "w" | gzip ; printf "xyz") | ./pigz -cdf | wc -c
+	printf "" | ./pigz -cdf | wc -c | test `cat` -eq 0
+	printf "x" | ./pigz -cdf | wc -c | test `cat` -eq 1
+	printf "xy" | ./pigz -cdf | wc -c | test `cat` -eq 2
+	printf "xyz" | ./pigz -cdf | wc -c | test `cat` -eq 3
+	(printf "w" | gzip ; printf "x") | ./pigz -cdf | wc -c | test `cat` -eq 2
+	(printf "w" | gzip ; printf "xy") | ./pigz -cdf | wc -c | test `cat` -eq 3
+	(printf "w" | gzip ; printf "xyz") | ./pigz -cdf | wc -c | test `cat` -eq 4
 	compress -f < pigz.c | ./unpigz | cmp - pigz.c
 	rm -f pigz.c.gz pigz.c.zz pigz.c.zip
 
