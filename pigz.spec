@@ -16,11 +16,18 @@ pigz, which stands for parallel implementation of gzip, is a fully functional re
 rm -rf $RPM_BUILD_ROOT
 %prep
 mkdir -p $RPM_BUILD_ROOT
+
 %setup -q
 %build
 make
 mkdir -p ${RPM_BUILD_ROOT}/usr/bin
-mv pigz ${RPM_BUILD_ROOT}/usr/bin
+mkdir -p ${RPM_BUILD_ROOT}/usr/man/man1
+mv pigz unpigz ${RPM_BUILD_ROOT}/usr/bin
+mv pigz.1 ${RPM_BUILD_ROOT}/usr/man/man1
+
 %files
 %defattr(-,root,root)
 /usr/bin/pigz
+/usr/bin/unpigz
+%doc
+/usr/man/man1/pigz.1
