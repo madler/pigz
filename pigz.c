@@ -110,6 +110,8 @@
                        Don't assume 2's complement ints in compress_thread()
                        Replicate gzip -cdf cat-like behavior
                        Replicate gzip -- option to suppress option decoding
+                       Test output from make test instead of showing it
+                       Updated pigz.spec to install unpigz, pigz.1 [Obermaier]
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -3113,7 +3115,7 @@ int main(int argc, char **argv)
     /* set all options to defaults */
     defaults();
 
-    /* process user environment variable defaults */
+    /* process user environment variable defaults in GZIP */
     opts = getenv("GZIP");
     if (opts != NULL) {
         while (*opts) {
