@@ -112,6 +112,7 @@
                        Replicate gzip -- option to suppress option decoding
                        Test output from make test instead of showing it
                        Updated pigz.spec to install unpigz, pigz.1 [Obermaier]
+                       Add PIGZ environment variable [Mueller]
  */
 
 #define VERSION "pigz 2.1.7\n"
