@@ -3133,6 +3133,24 @@ int main(int argc, char **argv)
         option(NULL);
     }
 
+    /* process user environment variable defaults in PIGZ as well */
+    opts = getenv("PIGZ");
+    if (opts != NULL) {
+        while (*opts) {
+            while (*opts == ' ' || *opts == '\t')
+                opts++;
+            p = opts;
+            while (*p && *p != ' ' && *p != '\t')
+                p++;
+            n = *p;
+            *p = 0;
+            if (option(opts))
+                bail("cannot provide files in PIGZ environment variable", "");
+            opts = p + (n ? 1 : 0);
+        }
+        option(NULL);
+    }
+
     /* if no command line arguments and stdout is a terminal, show help */
     if (argc < 2 && isatty(1))
         help();
