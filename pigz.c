@@ -113,6 +113,7 @@
                        Test output from make test instead of showing it
                        Updated pigz.spec to install unpigz, pigz.1 [Obermaier]
                        Add PIGZ environment variable [Mueller]
+                       Replicate gzip suffix search when decoding or listing
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -2515,6 +2516,9 @@ local void process(char *path)
     int method = -1;                /* get_header() return value */
     size_t len;                     /* length of base name (minus suffix) */
     struct stat st;                 /* to get file type and mod time */
+    /* all compressed suffixes for decoding search, in length order */
+    static char *sufs[] = {".z", "-z", "_z", ".Z", ".gz", "-gz", ".zz", "-zz",
+                           ".zip", ".ZIP", ".tgz", NULL};
 
     /* open input file with name in, descriptor ind -- set name and mtime */
     if (path == NULL) {
@@ -2534,18 +2538,34 @@ local void process(char *path)
         }
         len = strlen(in);
 
-        /* only process regular files, but allow symbolic links if -f,
-           recurse into directory if -r */
+        /* try to stat input file -- if not there and decoding, look for that
+           name with compressed suffixes */
         if (lstat(in, &st)) {
+            if (errno == ENOENT && (list || decode)) {
+                char **try = sufs;
+                do {
+                    if (*try == NULL || len + strlen(*try) >= sizeof(in))
+                        break;
+                    strcpy(in + len, *try++);
+                    errno = 0;
+                } while (lstat(in, &st) && errno == ENOENT);
+            }
 #ifdef EOVERFLOW
             if (errno == EOVERFLOW || errno == EFBIG)
                 bail(in,
                     " too large -- pigz not compiled with large file support");
 #endif
-            if (verbosity > 0)
-                fprintf(stderr, "%s does not exist -- skipping\n", in);
-            return;
+            if (errno) {
+                in[len] = 0;
+                if (verbosity > 0)
+                    fprintf(stderr, "%s does not exist -- skipping\n", in);
+                return;
+            }
+            len = strlen(in);
         }
+
+        /* only process regular files, but allow symbolic links if -f,
+           recurse into directory if -r */
         if ((st.st_mode & S_IFMT) != S_IFREG &&
             (st.st_mode & S_IFMT) != S_IFLNK &&
             (st.st_mode & S_IFMT) != S_IFDIR) {
