@@ -106,7 +106,7 @@
                        Decompress if executable named "gunzip" [Hoffstätte]
                        Allow ".tgz" suffix [Chernookiy]
                        Fix adler32 comparison on .zz files
-   2.1.7  xx Feb 2010  Avoid unused parameter warning in reenter()
+   2.1.7  xx Nov 2010  Avoid unused parameter warning in reenter()
                        Don't assume 2's complement ints in compress_thread()
                        Replicate gzip -cdf cat-like behavior
                        Replicate gzip -- option to suppress option decoding
@@ -114,6 +114,7 @@
                        Updated pigz.spec to install unpigz, pigz.1 [Obermaier]
                        Add PIGZ environment variable [Mueller]
                        Replicate gzip suffix search when decoding or listing
+                       Fix bug in load() to set in_left to zero on end of file
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -1453,7 +1454,7 @@ local void load_read(void *dummy)
 
 #endif
 
-/* load() is called when in_left has gone to zero in order to provide more
+/* load() is called when the input has been consumed in order to provide more
    input data: load the input buffer with BUF or less bytes (less if at end of
    file) from the file ind, set in_next to point to the in_left bytes read,
    update in_tot, and return in_left -- in_eof is set to true when in_left has
@@ -1463,6 +1464,7 @@ local size_t load(void)
     /* if already detected end of file, do nothing */
     if (in_short) {
         in_eof = 1;
+        in_left = 0;
         return 0;
     }
 
