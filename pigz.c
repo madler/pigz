@@ -47,7 +47,7 @@
                        Implement all command line options except --recursive
                        Add --keep option to prevent deleting input files
                        Add thread tracing information with -vv used
-                       Copy crc32_combine() from zlib (possible thread issue)
+                       Copy crc32_combine() from zlib (shared libraries issue)
    1.3    25 Feb 2007  Implement --recursive
                        Expand help to show all options
                        Show help if no arguments or output piping are provided
