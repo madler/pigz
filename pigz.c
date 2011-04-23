@@ -106,7 +106,7 @@
                        Decompress if executable named "gunzip" [Hoffstätte]
                        Allow ".tgz" suffix [Chernookiy]
                        Fix adler32 comparison on .zz files
-   2.1.7  xx Nov 2010  Avoid unused parameter warning in reenter()
+   2.1.7  xx May 2011  Avoid unused parameter warning in reenter()
                        Don't assume 2's complement ints in compress_thread()
                        Replicate gzip -cdf cat-like behavior
                        Replicate gzip -- option to suppress option decoding
@@ -115,6 +115,7 @@
                        Add PIGZ environment variable [Mueller]
                        Replicate gzip suffix search when decoding or listing
                        Fix bug in load() to set in_left to zero on end of file
+                       Do not check suffix when input file won't be modified
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -2661,8 +2662,8 @@ local void process(char *path)
             return;
         }
 
-        /* only decompress or list files with compressed suffix */
-        if (list || decode) {
+        /* only decompress over input file with compressed suffix */
+        if (decode && !pipeout) {
             int suf = compressed_suffix(in);
             if (suf == 0) {
                 if (verbosity > 0)
