@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007, 2008, 2009, 2010 Mark Adler
- * Version 2.1.7  xx Feb 2010  Mark Adler
+ * Copyright (C) 2007, 2008, 2009, 2010, 2011 Mark Adler
+ * Version 2.1.7  xx Sep 2011  Mark Adler
  */
 
 /*
@@ -106,7 +106,7 @@
                        Decompress if executable named "gunzip" [Hoffstätte]
                        Allow ".tgz" suffix [Chernookiy]
                        Fix adler32 comparison on .zz files
-   2.1.7  xx May 2011  Avoid unused parameter warning in reenter()
+   2.1.7  xx Sep 2011  Avoid unused parameter warning in reenter()
                        Don't assume 2's complement ints in compress_thread()
                        Replicate gzip -cdf cat-like behavior
                        Replicate gzip -- option to suppress option decoding
@@ -116,6 +116,7 @@
                        Replicate gzip suffix search when decoding or listing
                        Fix bug in load() to set in_left to zero on end of file
                        Do not check suffix when input file won't be modified
+                       Decompress to stdout if name is "*cat" [Hayasaka]
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -3179,11 +3180,13 @@ int main(int argc, char **argv)
     if (argc < 2 && isatty(1))
         help();
 
-    /* decompress if named "unpigz" or "gunzip" */
+    /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
     p = strrchr(argv[0], '/');
     p = p == NULL ? argv[0] : p + 1;
     if (strcmp(p, "unpigz") == 0 || strcmp(p, "gunzip") == 0)
         decode = 1, headis = 0;
+    if (strcmp(p + strlen(p) - 3, "cat") == 0)
+        decode = 1, headis = 0, pipeout = 1;
 
     /* process command-line arguments, no options after "--" */
     done = noop = 0;
