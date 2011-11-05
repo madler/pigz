@@ -1047,8 +1047,8 @@ local void finish_jobs(void)
    find) */
 local void compress_thread(void *dummy)
 {
-    struct job *job;                /* job pulled and working on */ 
-    struct job *here, **prior;      /* pointers for inserting in write list */ 
+    struct job *job;                /* job pulled and working on */
+    struct job *here, **prior;      /* pointers for inserting in write list */
     unsigned long check;            /* check value of input */
     unsigned char *next;            /* pointer for check value data */
     size_t len;                     /* remaining bytes to compress/check */
@@ -1184,7 +1184,7 @@ local void write_thread(void *dummy)
     Trace(("-- write thread running"));
     head = put_header();
 
-    /* process output of compress threads until end of input */    
+    /* process output of compress threads until end of input */
     ulen = clen = 0;
     check = CHECK(0L, Z_NULL, 0);
     seq = 0;
@@ -2214,6 +2214,14 @@ local void infchk(void)
                 if (zip_crc != out_check) {
                     if (zip_crc != 0x08074b50UL || zip_clen != out_check)
                         bail("corrupted zip entry -- crc32 mismatch: ", in);
+                    zip_crc = zip_clen;
+                    zip_clen = zip_ulen;
+                    zip_ulen = GET4();
+                }
+
+                /* handle incredibly rare cases where crc equals signature */
+                else if (zip_crc == 0x08074b50UL && zip_clen == zip_crc &&
+                         ((clen & LOW32) != zip_crc || zip_ulen == zip_crc)) {
                     zip_crc = zip_clen;
                     zip_clen = zip_ulen;
                     zip_ulen = GET4();
