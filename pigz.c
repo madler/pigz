@@ -122,6 +122,7 @@
                        Use CC variable for compiler in Makefile.
                        Exit with code 2 if a warning has been issued.
                        Fix thread synchronization problem when tracing.
+                       Change macro name MAX to MAX2 to avoid library conflicts
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -555,7 +556,7 @@ local void writen(int desc, unsigned char *buf, size_t len)
 
 /* largest power of 2 that fits in an unsigned int -- used to limit requests
    to zlib functions that use unsigned int lengths */
-#define MAX (UINT_MAX - (UINT_MAX >> 1))
+#define MAX2 (UINT_MAX - (UINT_MAX >> 1))
 
 /* convert Unix time to MS-DOS date and time, assuming current timezone
    (you got a better idea?) */
@@ -1109,16 +1110,16 @@ local void compress_thread(void *dummy)
         strm.next_in = job->in->buf;
         strm.next_out = job->out->buf;
 
-        /* run MAX-sized amounts of input through deflate -- this loop is
+        /* run MAX2-sized amounts of input through deflate -- this loop is
            needed for those cases where the integer type is smaller than the
            size_t type, or when len is close to the limit of the size_t type */
         len = job->in->len;
-        while (len > MAX) {
-            strm.avail_in = MAX;
+        while (len > MAX2) {
+            strm.avail_in = MAX2;
             strm.avail_out = UINT_MAX;
             (void)deflate(&strm, Z_NO_FLUSH);
             assert(strm.avail_in == 0 && strm.avail_out != 0);
-            len -= MAX;
+            len -= MAX2;
         }
 
         /* run the last piece through deflate -- terminate with a sync marker,
@@ -1151,10 +1152,10 @@ local void compress_thread(void *dummy)
         len = job->in->len;
         next = job->in->buf;
         check = CHECK(0L, Z_NULL, 0);
-        while (len > MAX) {
-            check = CHECK(check, next, MAX);
-            len -= MAX;
-            next += MAX;
+        while (len > MAX2) {
+            check = CHECK(check, next, MAX2);
+            len -= MAX2;
+            next += MAX2;
         }
         check = CHECK(check, next, (unsigned)len);
         drop_space(job->in);
@@ -1351,7 +1352,7 @@ local void single_compress(int reset)
 
     /* initialize the deflate structure if this is the first time */
     if (strm == NULL) {
-        out_size = size > MAX ? MAX : (unsigned)size;
+        out_size = size > MAX2 ? MAX2 : (unsigned)size;
         if ((in = malloc(size)) == NULL ||
             (next = malloc(size)) == NULL ||
             (out = malloc(out_size)) == NULL ||
@@ -1384,9 +1385,9 @@ local void single_compress(int reset)
         ulen += (unsigned long)got;
         strm->next_in = in;
 
-        /* compress MAX-size chunks in case unsigned type is small */
-        while (got > MAX) {
-            strm->avail_in = MAX;
+        /* compress MAX2-size chunks in case unsigned type is small */
+        while (got > MAX2) {
+            strm->avail_in = MAX2;
             check = CHECK(check, strm->next_in, strm->avail_in);
             do {
                 strm->avail_out = out_size;
@@ -1396,7 +1397,7 @@ local void single_compress(int reset)
                 clen += out_size - strm->avail_out;
             } while (strm->avail_out == 0);
             assert(strm->avail_in == 0);
-            got -= MAX;
+            got -= MAX2;
         }
 
         /* compress the remainder, finishing if end of input -- when not -i,
