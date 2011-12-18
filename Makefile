@@ -1,7 +1,8 @@
+CC=cc
 CFLAGS=-O3 -Wall -Wextra
 
 pigz: pigz.o yarn.o
-	cc -o pigz pigz.o yarn.o -lpthread -lz
+	$(CC) -o pigz pigz.o yarn.o -lpthread -lz
 	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h
@@ -11,19 +12,19 @@ yarn.o: yarn.c yarn.h
 dev: pigz pigzt pigzn
 
 pigzt: pigzt.o yarnt.o
-	cc -o pigzt pigzt.o yarnt.o -lpthread -lz
+	$(CC) -o pigzt pigzt.o yarnt.o -lpthread -lz
 
 pigzt.o: pigz.c yarn.h
-	cc -Wall -O3 -DDEBUG -g -c -o pigzt.o pigz.c
+	$(CC) -Wall -O3 -DDEBUG -g -c -o pigzt.o pigz.c
 
 yarnt.o: yarn.c yarn.h
-	cc -Wall -O3 -DDEBUG -g -c -o yarnt.o yarn.c
+	$(CC) -Wall -O3 -DDEBUG -g -c -o yarnt.o yarn.c
 
 pigzn: pigzn.o
-	cc -o pigzn pigzn.o -lz
+	$(CC) -o pigzn pigzn.o -lz
 
 pigzn.o: pigz.c
-	cc -Wall -O3 -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
+	$(CC) -Wall -O3 -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
 
 test: pigz
 	./pigz -kf pigz.c ; ./pigz -t pigz.c.gz
