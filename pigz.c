@@ -2862,31 +2862,35 @@ local char *helptext[] = {
 "Options:",
 "  -0 to -9, --fast, --best   Compression levels, --fast is -1, --best is -9",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
+"  -c, --stdout         Write all processed output to stdout (won't delete)",
+"  -d, --decompress     Decompress the compressed input",
+"  -f, --force          Force overwrite, compress .gz, links, and to terminal",
+"  -h, --help           Display a help screen and quit",
+"  -i, --independent    Compress blocks independently for damage recovery",
+"  -k, --keep           Do not delete original file after processing",
+"  -K, --zip            Compress to PKWare zip (.zip) single entry format",
+"  -l, --list           List the contents of the compressed input",
+"  -L, --license        Display the pigz license and quit",
+"  -n, --no-name        Do not store or restore file name in/from header",
+"  -N, --name           Store/restore file name and mod time in/from header",
 #ifndef NOTHREAD
 "  -p, --processes n    Allow up to n compression threads (default is the",
 "                       number of online processors, or 8 if unknown)",
 #endif
-"  -i, --independent    Compress blocks independently for damage recovery",
-"  -R, --rsyncable      Input-determined block locations for rsync",
-"  -d, --decompress     Decompress the compressed input",
-"  -t, --test           Test the integrity of the compressed input",
-"  -l, --list           List the contents of the compressed input",
-"  -f, --force          Force overwrite, compress .gz, links, and to terminal",
-"  -r, --recursive      Process the contents of all subdirectories",
-"  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
-"  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
-"  -K, --zip            Compress to PKWare zip (.zip) single entry format",
-"  -k, --keep           Do not delete original file after processing",
-"  -c, --stdout         Write all processed output to stdout (won't delete)",
-"  -N, --name           Store/restore file name and mod time in/from header",
-"  -n, --no-name        Do not store or restore file name in/from header",
-"  -T, --no-time        Do not store or restore mod time in/from header",
 "  -q, --quiet          Print no messages, even on error",
+"  -r, --recursive      Process the contents of all subdirectories",
+/* "  -R, --rsyncable      Input-determined block locations for rsync", */
+"  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
+"  -t, --test           Test the integrity of the compressed input",
+"  -T, --no-time        Do not store or restore mod time in/from header",
 #ifdef DEBUG
-"  -v, --verbose        Provide more verbose output (-vv to debug)"
+"  -v, --verbose        Provide more verbose output (-vv to debug)",
 #else
-"  -v, --verbose        Provide more verbose output"
+"  -v, --verbose        Provide more verbose output",
 #endif
+"  -V  --version        Show the version of pigz",
+"  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
+"  --                   All arguments after \"--\" are treated as files"
 };
 
 /* display the help text above */
