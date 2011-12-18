@@ -119,6 +119,9 @@
                        Decompress to stdout if name is "*cat" [Hayasaka]
                        Write data descriptor signature to be like Info-ZIP
                        Update and sort options list in help
+                       Use CC variable for compiler in Makefile.
+                       Exit with code 2 if a warning has been issued.
+                       Fix thread synchronization problem when tracing.
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -1156,9 +1159,9 @@ local void compress_thread(void *dummy)
         check = CHECK(check, next, (unsigned)len);
         drop_space(job->in);
         job->check = check;
+        Trace(("-- checked #%ld%s", job->seq, job->more ? "" : " (last)"));
         possess(job->calc);
         twist(job->calc, TO, 1);
-        Trace(("-- checked #%ld%s", job->seq, job->more ? "" : " (last)"));
 
         /* done with that one -- go find another job */
     }
