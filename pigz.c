@@ -119,10 +119,11 @@
                        Decompress to stdout if name is "*cat" [Hayasaka]
                        Write data descriptor signature to be like Info-ZIP
                        Update and sort options list in help
-                       Use CC variable for compiler in Makefile.
+                       Use CC variable for compiler in Makefile
                        Exit with code 2 if a warning has been issued.
-                       Fix thread synchronization problem when tracing.
+                       Fix thread synchronization problem when tracing
                        Change macro name MAX to MAX2 to avoid library conflicts
+                       Determine number of processors on HP-UX [Lloyd]
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -284,6 +285,11 @@
 #include <dirent.h>     /* opendir(), readdir(), closedir(), DIR, */
                         /* struct dirent */
 #include <limits.h>     /* PATH_MAX, UINT_MAX */
+
+#ifdef __hpux
+#  include <sys/param.h>
+#  include <sys/pstat.h>
+#endif
 
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
@@ -2948,6 +2954,13 @@ local int nprocs(int n)
 #  else
 #    ifdef _SC_NPROC_ONLN
     n = (int)sysconf(_SC_NPROC_ONLN);
+#    else
+#      ifdef __hpux
+    struct pst_dynamic psd;
+
+    if (pstat_getdynamic(&psd, sizeof(psd), (size_t)1, 0) != -1)
+        n = psd.psd_proc_cnt;
+#      endif
 #    endif
 #  endif
     return n;
