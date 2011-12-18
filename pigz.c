@@ -118,6 +118,7 @@
                        Do not check suffix when input file won't be modified
                        Decompress to stdout if name is "*cat" [Hayasaka]
                        Write data descriptor signature to be like Info-ZIP
+                       Update and sort options list in help
  */
 
 #define VERSION "pigz 2.1.7\n"
