@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011 Mark Adler
- * Version 2.1.7  xx Sep 2011  Mark Adler
+ * Version 2.1.7  17 Dec 2011  Mark Adler
  */
 
 /*
@@ -106,7 +106,7 @@
                        Decompress if executable named "gunzip" [Hoffstätte]
                        Allow ".tgz" suffix [Chernookiy]
                        Fix adler32 comparison on .zz files
-   2.1.7  xx Sep 2011  Avoid unused parameter warning in reenter()
+   2.1.7  17 Dec 2011  Avoid unused parameter warning in reenter()
                        Don't assume 2's complement ints in compress_thread()
                        Replicate gzip -cdf cat-like behavior
                        Replicate gzip -- option to suppress option decoding
@@ -117,6 +117,7 @@
                        Fix bug in load() to set in_left to zero on end of file
                        Do not check suffix when input file won't be modified
                        Decompress to stdout if name is "*cat" [Hayasaka]
+                       Write data descriptor signature to be like Info-ZIP
  */
 
 #define VERSION "pigz 2.1.7\n"
@@ -649,10 +650,11 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
         unsigned long cent;
 
         /* write data descriptor (as promised in local header) */
-        PUT4L(tail, check);
-        PUT4L(tail + 4, clen);
-        PUT4L(tail + 8, ulen);
-        writen(outd, tail, 12);
+        PUT4L(tail, 0x08074b50UL);
+        PUT4L(tail + 4, check);
+        PUT4L(tail + 8, clen);
+        PUT4L(tail + 12, ulen);
+        writen(outd, tail, 16);
 
         /* write central file header */
         PUT4L(tail, 0x02014b50UL);  /* central header signature */
@@ -2203,7 +2205,7 @@ local void infchk(void)
         /* read and check trailer */
         if (form > 1) {             /* zip local trailer (if any) */
             if (form == 3) {        /* data descriptor follows */
-                /* read original version of data descriptor*/
+                /* read original version of data descriptor */
                 zip_crc = GET4();
                 zip_clen = GET4();
                 zip_ulen = GET4();
