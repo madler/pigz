@@ -120,7 +120,7 @@
                        Write data descriptor signature to be like Info-ZIP
                        Update and sort options list in help
                        Use CC variable for compiler in Makefile
-                       Exit with code 2 if a warning has been issued.
+                       Exit with code 2 if a warning has been issued
                        Fix thread synchronization problem when tracing
                        Change macro name MAX to MAX2 to avoid library conflicts
                        Determine number of processors on HP-UX [Lloyd]
