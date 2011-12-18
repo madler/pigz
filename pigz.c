@@ -341,6 +341,7 @@ local int rsync;            /* true for rsync blocking */
 local int procs;            /* maximum number of compression threads (>= 1) */
 local int dict;             /* true to initialize dictionary in each thread */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
+local int warned = 0;       /* true if a warning has been given */
 
 /* saved gzip/zip header data for decompression, testing, and listing */
 local time_t stamp;                 /* time stamp from gzip header */
@@ -1917,8 +1918,10 @@ local void list_info(void)
     method = get_header(1);
     if (method < 0) {
         RELEASE(hname);
-        if (method != -1 && verbosity > 1)
+        if (method != -1 && verbosity > 1) {
             fprintf(stderr, "%s not a compressed file -- skipping\n", in);
+            warned = 1;
+        }
         return;
     }
 
@@ -1969,9 +1972,11 @@ local void list_info(void)
     /* skip to end to get trailer (8 bytes), compute compressed length */
     if (in_short) {                     /* whole thing already read */
         if (in_left < 8) {
-            if (verbosity > 0)
+            if (verbosity > 0) {
                 fprintf(stderr, "%s not a valid gzip file -- skipping\n",
                         in);
+                warned = 1;
+            }
             return;
         }
         in_tot = in_left - 8;           /* compressed size */
@@ -1990,9 +1995,11 @@ local void list_info(void)
         } while (in_left == BUF);       /* read until end */
         if (in_left < 8) {
             if (n + in_left < 8) {
-                if (verbosity > 0)
+                if (verbosity > 0) {
                     fprintf(stderr, "%s not a valid gzip file -- skipping\n",
                             in);
+                    warned = 1;
+                }
                 return;
             }
             if (in_left) {
@@ -2006,8 +2013,10 @@ local void list_info(void)
         in_tot -= at + 8;
     }
     if (in_tot < 2) {
-        if (verbosity > 0)
+        if (verbosity > 0) {
             fprintf(stderr, "%s not a valid gzip file -- skipping\n", in);
+            warned = 1;
+        }
         return;
     }
 
@@ -2277,8 +2286,10 @@ local void infchk(void)
     /* gzip -cdf copies junk after gzip stream directly to output */
     if (form < 2 && ret == -2 && force && pipeout && decode != 2 && !list)
         cat();
-    else if (ret != -1 && form < 2)
+    else if (ret != -1 && form < 2) {
         fprintf(stderr, "%s OK, has trailing junk which was ignored\n", in);
+        warned = 1;
+    }
 }
 
 /* --- decompress Unix compress (LZW) input --- */
@@ -2572,8 +2583,10 @@ local void process(char *path)
 #endif
             if (errno) {
                 in[len] = 0;
-                if (verbosity > 0)
+                if (verbosity > 0) {
                     fprintf(stderr, "%s does not exist -- skipping\n", in);
+                    warned = 1;
+                }
                 return;
             }
             len = strlen(in);
@@ -2584,19 +2597,25 @@ local void process(char *path)
         if ((st.st_mode & S_IFMT) != S_IFREG &&
             (st.st_mode & S_IFMT) != S_IFLNK &&
             (st.st_mode & S_IFMT) != S_IFDIR) {
-            if (verbosity > 0)
+            if (verbosity > 0) {
                 fprintf(stderr, "%s is a special file or device -- skipping\n",
                         in);
+                warned = 1;
+            }
             return;
         }
         if ((st.st_mode & S_IFMT) == S_IFLNK && !force && !pipeout) {
-            if (verbosity > 0)
+            if (verbosity > 0) {
                 fprintf(stderr, "%s is a symbolic link -- skipping\n", in);
+                warned = 1;
+            }
             return;
         }
         if ((st.st_mode & S_IFMT) == S_IFDIR && !recurse) {
-            if (verbosity > 0)
+            if (verbosity > 0) {
                 fprintf(stderr, "%s is a directory -- skipping\n", in);
+                warned = 1;
+            }
             return;
         }
 
@@ -2669,8 +2688,10 @@ local void process(char *path)
         /* don't compress .gz (or provided suffix) files, unless -f */
         if (!(force || list || decode) && len >= strlen(sufx) &&
                 strcmp(in + len - strlen(sufx), sufx) == 0) {
-            if (verbosity > 0)
+            if (verbosity > 0) {
                 fprintf(stderr, "%s ends with %s -- skipping\n", in, sufx);
+                warned = 1;
+            }
             return;
         }
 
@@ -2678,10 +2699,12 @@ local void process(char *path)
         if (decode && !pipeout) {
             int suf = compressed_suffix(in);
             if (suf == 0) {
-                if (verbosity > 0)
+                if (verbosity > 0) {
                     fprintf(stderr,
                             "%s does not have compressed suffix -- skipping\n",
                             in);
+                    warned = 1;
+                }
                 return;
             }
             len -= suf;
@@ -2709,11 +2732,13 @@ local void process(char *path)
             RELEASE(hname);
             if (ind != 0)
                 close(ind);
-            if (method != -1 && verbosity > 0)
+            if (method != -1 && verbosity > 0) {
                 fprintf(stderr,
                     method < 0 ? "%s is not compressed -- skipping\n" :
                         "%s has unknown compression method -- skipping\n",
                     in);
+                warned = 1;
+            }
             return;
         }
 
@@ -2794,8 +2819,10 @@ local void process(char *path)
 
         /* if exists and no overwrite, report and go on to next */
         if (outd < 0 && errno == EEXIST) {
-            if (verbosity > 0)
+            if (verbosity > 0) {
                 fprintf(stderr, "%s exists -- skipping\n", out);
+                warned = 1;
+            }
             RELEASE(out);
             RELEASE(hname);
             if (ind != 0)
@@ -3227,5 +3254,5 @@ int main(int argc, char **argv)
     /* done -- release resources, show log */
     new_opts();
     log_dump();
-    return 0;
+    return warned ? 2 : 0;
 }
