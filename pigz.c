@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011 Mark Adler
- * Version 2.1.7  17 Dec 2011  Mark Adler
+ * Version 2.1.8  xx Dec 2011  Mark Adler
  */
 
 /*
@@ -124,9 +124,10 @@
                        Fix thread synchronization problem when tracing
                        Change macro name MAX to MAX2 to avoid library conflicts
                        Determine number of processors on HP-UX [Lloyd]
+   2.1.8  xx Dec 2011  
  */
 
-#define VERSION "pigz 2.1.7\n"
+#define VERSION "pigz 2.1.8\n"
 
 /* To-do:
     - add --rsyncable (or -R) [use a better algorithm than modified gzip]
