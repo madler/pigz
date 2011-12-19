@@ -124,7 +124,7 @@
                        Fix thread synchronization problem when tracing
                        Change macro name MAX to MAX2 to avoid library conflicts
                        Determine number of processors on HP-UX [Lloyd]
-   2.1.8  xx Dec 2011  
+   2.1.8  xx Dec 2011  Check for expansion bound busting (e.g. modified zlib)
  */
 
 #define VERSION "pigz 2.1.8\n"
@@ -1067,6 +1067,7 @@ local void compress_thread(void *dummy)
     unsigned long check;            /* check value of input */
     unsigned char *next;            /* pointer for check value data */
     size_t len;                     /* remaining bytes to compress/check */
+    size_t left;                    /* space left in output buffer */
     z_stream strm;                  /* deflate stream */
 
     (void)dummy;
@@ -1123,7 +1124,9 @@ local void compress_thread(void *dummy)
         len = job->in->len;
         while (len > MAX2) {
             strm.avail_in = MAX2;
-            strm.avail_out = UINT_MAX;
+            left = out_pool.size -
+                   (strm.next_out - (unsigned char *)(job->out->buf));
+            strm.avail_out = UINT_MAX > left ? (unsigned)left : UINT_MAX;
             (void)deflate(&strm, Z_NO_FLUSH);
             assert(strm.avail_in == 0 && strm.avail_out != 0);
             len -= MAX2;
@@ -1132,8 +1135,10 @@ local void compress_thread(void *dummy)
         /* run the last piece through deflate -- terminate with a sync marker,
            or finish deflate stream if this is the last block */
         strm.avail_in = (unsigned)len;
-        strm.avail_out = UINT_MAX;
-        (void)deflate(&strm, job->more ? Z_SYNC_FLUSH :  Z_FINISH);
+        left = out_pool.size -
+               (strm.next_out - (unsigned char *)(job->out->buf));
+        strm.avail_out = UINT_MAX > left ? (unsigned)left : UINT_MAX;
+        (void)deflate(&strm, job->more ? Z_SYNC_FLUSH : Z_FINISH);
         assert(strm.avail_in == 0 && strm.avail_out != 0);
         job->out->len = strm.next_out - (unsigned char *)(job->out->buf);
         Trace(("-- compressed #%ld%s", job->seq, job->more ? "" : " (last)"));
