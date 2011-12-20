@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
- * Copyright (C) 2008 Mark Adler
- * Version 1.1  26 Oct 2008  Mark Adler
+ * Copyright (C) 2008, 2011 Mark Adler
+ * Version 1.2  19 Dec 2011  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -13,6 +13,7 @@
    1.0    19 Oct 2008  First version
    1.1    26 Oct 2008  No need to set the stack size -- remove
                        Add yarn_abort() function for clean-up on error exit
+   1.2    19 Dec 2011  Make the "threads" list head global variable volatile
  */
 
 /* for thread portability */
@@ -185,7 +186,7 @@ local lock threads_lock = {
     PTHREAD_COND_INITIALIZER,
     0                           /* number of threads exited but not joined */
 };
-local thread *threads = NULL;       /* list of extant threads */
+local volatile thread *threads = NULL;          /* list of extant threads */
 
 /* structure in which to pass the probe and its payload to ignition() */
 struct capsule {
@@ -204,7 +205,7 @@ local void reenter(void *dummy)
     /* find this thread in the threads list by matching the thread id */
     me = pthread_self();
     possess(&(threads_lock));
-    prior = &(threads);
+    prior = (thread **)&(threads);
     while ((match = *prior) != NULL) {
         if (pthread_equal(match->id, me))
             break;
@@ -217,7 +218,7 @@ local void reenter(void *dummy)
     match->done = 1;
     if (threads != match) {
         *prior = match->next;
-        match->next = threads;
+        match->next = (thread *)threads;
         threads = match;
     }
 
@@ -278,7 +279,7 @@ thread *launch(void (*probe)(void *), void *payload)
 
     /* put the thread in the threads list for join_all() */
     th->done = 0;
-    th->next = threads;
+    th->next = (thread *)threads;
     threads = th;
     release(&(threads_lock));
     return th;
@@ -295,7 +296,7 @@ void join(thread *ally)
 
     /* find the thread in the threads list */
     possess(&(threads_lock));
-    prior = &(threads);
+    prior = (thread **)&(threads);
     while ((match = *prior) != NULL) {
         if (match == ally)
             break;
@@ -331,7 +332,7 @@ int join_all(void)
         wait_for(&(threads_lock), NOT_TO_BE, 0);
 
         /* find the first thread marked done (should be at or near the top) */
-        prior = &(threads);
+        prior = (thread **)&(threads);
         while ((match = *prior) != NULL) {
             if (match->done)
                 break;
