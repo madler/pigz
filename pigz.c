@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011 Mark Adler
- * Version 2.1.8  xx Dec 2011  Mark Adler
+ * Version 2.2  xx Dec 2011  Mark Adler
  */
 
 /*
@@ -124,17 +124,16 @@
                        Fix thread synchronization problem when tracing
                        Change macro name MAX to MAX2 to avoid library conflicts
                        Determine number of processors on HP-UX [Lloyd]
-   2.1.8  xx Dec 2011  Check for expansion bound busting (e.g. modified zlib)
+   2.2    xx Dec 2011  Check for expansion bound busting (e.g. modified zlib)
                        Fix construction and printing of 32-bit check values
+                       Add --rsyncable functionality
  */
 
-#define VERSION "pigz 2.1.8\n"
+#define VERSION "pigz 2.2\n"
 
 /* To-do:
-    - add --rsyncable (or -R) [use a better algorithm than modified gzip]
     - make source portable for Windows, VMS, etc. (see gzip source code)
     - make build portable (currently good for Unixish)
-    - add bzip2 decompression (using threads)
  */
 
 /*
@@ -329,6 +328,66 @@
         } \
     } while (0)
 
+/* sliding dictionary size for deflate */
+#define DICT 32768U
+
+/* largest power of 2 that fits in an unsigned int -- used to limit requests
+   to zlib functions that use unsigned int lengths */
+#define MAXP2 (UINT_MAX - (UINT_MAX >> 1))
+
+/* rsyncable constants -- RSYNCBITS is the number of bits in the mask for
+   comparison.  For random input data, there will be a hit on average every
+   1<<RSYNCBITS bytes.  So for an RSYNCBITS of 12, there will be an average of
+   one hit every 4096 bytes, resulting in a mean block size of 4096.  RSYNCMASK
+   is the resulting bit mask.  RSYNCHIT is what the hash value is compared to
+   after applying the mask.
+
+   The choice of 12 for RSYNCBITS is consistent with the original rsyncable
+   patch for gzip which also uses a 12-bit mask.  This results in a relatively
+   small hit to compression, on the order of 1.5% to 3%.  A mask of 13 bits can
+   be used instead if a hit of less than 1% to the compression is desired, at
+   the expense of more blocks transmitted for rsync updates.  (Your mileage may
+   vary.)
+
+   This implementation of rsyncable uses a different hash algorithm than what
+   the gzip rsyncable patch uses in order to provide better performance in
+   several regards.  The algorithm is simply to shift the hash value left one
+   bit and exclusive-or that with the next byte.  This is masked to the number
+   of hash bits (RSYNCMASK) and compared to all ones except for a zero in the
+   top bit (RSYNCHIT). This rolling hash has a very small window of 19 bytes
+   (RSYNCBITS+7).  The small window provides the benefit of much more rapid
+   resynchronization after a change, than does the 4096-byte window of the gzip
+   rsyncable patch.
+
+   The comparison value is chosen to avoid matching any repeated bytes or short
+   sequences.  The gzip rsyncable patch on the other hand uses a sum and zero
+   for comparison, which results in certain bad behaviors, such as always
+   matching everywhere in a long sequence of zeros.  Such sequences occur
+   frequently in tar files.
+
+   This hash efficiently discards history older than 19 bytes simply by
+   shifting that data past the top of the mask -- no history needs to be
+   retained to undo its impact on the hash value, as is needed for a sum.
+
+   The choice of the comparison value (RSYNCHIT) has the virtue of avoiding
+   extremely short blocks.  The shortest possible block is six bytes, whereas
+   with the gzip rsyncable algorithm, blocks of one byte were not only
+   possible, but in fact were the most likely block size.
+
+   Thanks and acknowledgement to Kevin Day for his experimentation and insights
+   on rsyncable hash characteristics that led to some of the choices here.
+ */
+#define RSYNCBITS 12
+#define RSYNCMASK ((1U << RSYNCBITS) - 1)
+#define RSYNCHIT (RSYNCMASK >> 1)
+
+/* initial pool counts and sizes -- INBUFS is the limit on the number of input
+   spaces as a function of the number of processors (used to throttle the
+   creation of compression jobs), OUTPOOL is the initial size of the output
+   data buffer, chosen to make resizing of the buffer very unlikely */
+#define INBUFS(p) (((p)<<1)+(p)+2)
+#define OUTPOOL(s) ((s)+((s)>>4))
+
 /* globals (modified by main thread only when it's the only thread) */
 local int ind;              /* input file descriptor */
 local int outd;             /* output file descriptor */
@@ -351,7 +410,7 @@ local int decode;           /* 0 to compress, 1 to decompress, 2 to test */
 local int level;            /* compression level */
 local int rsync;            /* true for rsync blocking */
 local int procs;            /* maximum number of compression threads (>= 1) */
-local int dict;             /* true to initialize dictionary in each thread */
+local int setdict;          /* true to initialize dictionary in each thread */
 local size_t size;          /* uncompressed input size per thread (>= 32K) */
 local int warned = 0;       /* true if a warning has been given */
 
@@ -558,13 +617,6 @@ local void writen(int desc, unsigned char *buf, size_t len)
         len -= ret;
     }
 }
-
-/* sliding dictionary size for deflate */
-#define DICT 32768U
-
-/* largest power of 2 that fits in an unsigned int -- used to limit requests
-   to zlib functions that use unsigned int lengths */
-#define MAX2 (UINT_MAX - (UINT_MAX >> 1))
 
 /* convert Unix time to MS-DOS date and time, assuming current timezone
    (you got a better idea?) */
@@ -855,8 +907,9 @@ local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
 /* a space (one buffer for each space) */
 struct space {
     lock *use;              /* use count -- return to pool when zero */
-    void *buf;              /* buffer of size pool->size */
-    size_t len;             /* for application usage */
+    unsigned char *buf;     /* buffer of size size */
+    size_t size;            /* current size of this buffer */
+    size_t len;             /* for application usage (initially zero) */
     struct pool *pool;      /* pool to return to */
     struct space *next;     /* for pool linked list */
 };
@@ -865,7 +918,7 @@ struct space {
 struct pool {
     lock *have;             /* unused spaces available, lock for list */
     struct space *head;     /* linked list of available buffers */
-    size_t size;            /* size of all buffers in this pool */
+    size_t size;            /* size of new buffers in this pool */
     int limit;              /* number of new spaces allowed, or -1 */
     int made;               /* number of buffers made */
 };
@@ -900,6 +953,7 @@ local struct space *get_space(struct pool *pool)
         pool->head = space->next;
         twist(pool->have, BY, -1);      /* one less in pool */
         twist(space->use, TO, 1);       /* initially one user */
+        space->len = 0;
         return space;
     }
 
@@ -916,8 +970,49 @@ local struct space *get_space(struct pool *pool)
     space->buf = malloc(pool->size);
     if (space->buf == NULL)
         bail("not enough memory", "");
+    space->size = pool->size;
+    space->len = 0;
     space->pool = pool;                 /* remember the pool this belongs to */
     return space;
+}
+
+/* compute next size up by multiplying by about 2**(1/3) and round to the next
+   power of 2 if we're close (so three applications results in doubling) -- if
+   small, go up to at least 16, if overflow, go to max size_t value */
+local size_t grow(size_t size)
+{
+    size_t was, top;
+    int shift;
+
+    was = size;
+    size += size >> 2;
+    top = size;
+    for (shift = 0; top > 7; shift++)
+        top >>= 1;
+    if (top == 7)
+        size = (size_t)1 << (shift + 3);
+    if (size < 16)
+        size = 16;
+    if (size <= was)
+        size = (size_t)0 - 1;
+    return size;
+}
+
+/* increase the size of the buffer in space */
+local void grow_space(struct space *space)
+{
+    size_t more;
+
+    /* compute next size up */
+    more = grow(space->size);
+    if (more == space->size)
+        bail("not enough memory", "");
+
+    /* reallocate the buffer */
+    space->buf = realloc(space->buf, more);
+    if (space->buf == NULL)
+        bail("not enough memory", "");
+    space->size = more;
 }
 
 /* increment the use count to require one more drop before returning this space
@@ -972,6 +1067,8 @@ local int free_pool(struct pool *pool)
 /* input and output buffer pools */
 local struct pool in_pool;
 local struct pool out_pool;
+local struct pool dict_pool;
+local struct pool lens_pool;
 
 /* -- parallel compression -- */
 
@@ -983,6 +1080,7 @@ struct job {
     int more;                   /* true if this is not the last chunk */
     struct space *in;           /* input data to compress */
     struct space *out;          /* dictionary or resulting compressed data */
+    struct space *lens;         /* coded list of flush block lengths */
     unsigned long check;        /* check value for input data */
     lock *calc;                 /* released when check calculation complete */
     struct job *next;           /* next job in the list (either list) */
@@ -1016,9 +1114,13 @@ local void setup_jobs(void)
     write_first = new_lock(-1);
     write_head = NULL;
 
-    /* initialize buffer pools */
-    new_pool(&in_pool, size, (procs << 1) + 2);
-    new_pool(&out_pool, size + (size >> 11) + 10, -1);
+    /* initialize buffer pools (initial size for out_pool not critical, since
+       buffers will be grown in size if needed -- initial size chosen to make
+       this unlikely -- same for lens_pool) */
+    new_pool(&in_pool, size, INBUFS(procs));
+    new_pool(&out_pool, OUTPOOL(size), -1);
+    new_pool(&dict_pool, DICT, -1);
+    new_pool(&lens_pool, size >> (RSYNCBITS - 1), -1);
 }
 
 /* command the compress threads to all return, then join them all (call from
@@ -1047,6 +1149,10 @@ local void finish_jobs(void)
     cthreads = 0;
 
     /* free the resources */
+    caught = free_pool(&lens_pool);
+    Trace(("-- freed %d block lengths buffers", caught));
+    caught = free_pool(&dict_pool);
+    Trace(("-- freed %d dictionary buffers", caught));
     caught = free_pool(&out_pool);
     Trace(("-- freed %d output buffers", caught));
     caught = free_pool(&in_pool);
@@ -1054,6 +1160,28 @@ local void finish_jobs(void)
     free_lock(write_first);
     free_lock(compress_have);
     compress_have = NULL;
+}
+
+/* compress all strm->avail_in bytes at strm->next_in to out->buf, updating
+   out->len, grow the size of the buffer (out->size) if necessary -- respect
+   the size limitations of the zlib stream data types (size_t may be larger
+   than unsigned) */
+local void deflate_engine(z_stream *strm, struct space *out, int flush)
+{
+    size_t room;
+
+    do {
+        room = out->size - out->len;
+        if (room == 0) {
+            grow_space(out);
+            room = out->size - out->len;
+        }
+        strm->next_out = out->buf + out->len;
+        strm->avail_out = room < UINT_MAX ? (unsigned)room : UINT_MAX;
+        (void)deflate(strm, flush);
+        out->len = strm->next_out - out->buf;
+    } while (strm->avail_out == 0);
+    assert(strm->avail_in == 0);
 }
 
 /* get the next compression job from the head of the list, compress and compute
@@ -1066,9 +1194,12 @@ local void compress_thread(void *dummy)
     struct job *job;                /* job pulled and working on */
     struct job *here, **prior;      /* pointers for inserting in write list */
     unsigned long check;            /* check value of input */
-    unsigned char *next;            /* pointer for check value data */
+    unsigned char *next;            /* pointer for blocks, check value data */
+    size_t left;                    /* input left to process */
     size_t len;                     /* remaining bytes to compress/check */
-    size_t left;                    /* space left in output buffer */
+#if ZLIB_VERNUM >= 0x1253
+    int bits;                       /* deflate pending bits */
+#endif
     z_stream strm;                  /* deflate stream */
 
     (void)dummy;
@@ -1102,46 +1233,70 @@ local void compress_thread(void *dummy)
         (void)deflateReset(&strm);
         (void)deflateParams(&strm, level, Z_DEFAULT_STRATEGY);
 
-        /* set dictionary if provided, release that input buffer (only provided
-           if dict is true and if this is not the first work unit) -- the
-           amount of data in the buffer is assured to be >= DICT */
+        /* set dictionary if provided, release that input or dictionary buffer
+           (not NULL if dict is true and if this is not the first work unit) */
         if (job->out != NULL) {
             len = job->out->len;
-            deflateSetDictionary(&strm,
-                (unsigned char *)(job->out->buf) + (len - DICT), DICT);
+            left = len < DICT ? len : DICT;
+            deflateSetDictionary(&strm, job->out->buf + (len - left), left);
             drop_space(job->out);
         }
 
-        /* set up input and output (the output size is assured to be big enough
-           for the worst case expansion of the input buffer size, plus five
-           bytes for the terminating stored block) */
+        /* set up input and output */
         job->out = get_space(&out_pool);
         strm.next_in = job->in->buf;
         strm.next_out = job->out->buf;
 
-        /* run MAX2-sized amounts of input through deflate -- this loop is
-           needed for those cases where the integer type is smaller than the
-           size_t type, or when len is close to the limit of the size_t type */
-        len = job->in->len;
-        while (len > MAX2) {
-            strm.avail_in = MAX2;
-            left = out_pool.size -
-                   (strm.next_out - (unsigned char *)(job->out->buf));
-            strm.avail_out = UINT_MAX > left ? (unsigned)left : UINT_MAX;
-            (void)deflate(&strm, Z_NO_FLUSH);
-            assert(strm.avail_in == 0 && strm.avail_out != 0);
-            len -= MAX2;
-        }
+        /* compress each block, either flushing or finishing */
+        next = job->lens == NULL ? NULL : job->lens->buf;
+        left = job->in->len;
+        job->out->len = 0;
+        do {
+            /* decode next block length from blocks list */
+            len = next == NULL ? 128 : *next++;
+            if (len < 128)                          /* 64..32831 */
+                len = (len << 8) + (*next++) + 64;
+            else if (len == 128)                    /* end of list */
+                len = left;
+            else if (len < 192)                     /* 1..63 */
+                len &= 0x3f;
+            else {                                  /* 32832..4227135 */
+                len = ((len & 0x3f) << 16) + (*next++ << 8) + 32832U;
+                len += *next++;
+            }
+            left -= len;
 
-        /* run the last piece through deflate -- terminate with a sync marker,
-           or finish deflate stream if this is the last block */
-        strm.avail_in = (unsigned)len;
-        left = out_pool.size -
-               (strm.next_out - (unsigned char *)(job->out->buf));
-        strm.avail_out = UINT_MAX > left ? (unsigned)left : UINT_MAX;
-        (void)deflate(&strm, job->more ? Z_SYNC_FLUSH : Z_FINISH);
-        assert(strm.avail_in == 0 && strm.avail_out != 0);
-        job->out->len = strm.next_out - (unsigned char *)(job->out->buf);
+            /* run MAXP2-sized amounts of input through deflate -- this loop is
+               needed for those cases where the unsigned type is smaller than
+               the size_t type, or when len is close to the limit of the size_t
+               type */
+            while (len > MAXP2) {
+                strm.avail_in = MAXP2;
+                deflate_engine(&strm, job->out, Z_NO_FLUSH);
+                len -= MAXP2;
+            }
+
+            /* run the last piece through deflate -- end on a byte boundary,
+               using a sync marker if necessary, or finish the deflate stream
+               if this is the last block */
+            strm.avail_in = (unsigned)len;
+            if (left || job->more) {
+#if ZLIB_VERNUM >= 0x1253
+                deflate_engine(&strm, job->out, Z_BLOCK);
+                (void)deflatePending(&strm, Z_NULL, &bits);
+                if (bits & 7)
+                    deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+#else
+                deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+#endif
+            }
+            else
+                deflate_engine(&strm, job->out, Z_FINISH);
+        } while (left);
+        if (job->lens != NULL) {
+            drop_space(job->lens);
+            job->lens = NULL;
+        }
         Trace(("-- compressed #%ld%s", job->seq, job->more ? "" : " (last)"));
 
         /* reserve input buffer until check value has been calculated */
@@ -1165,10 +1320,10 @@ local void compress_thread(void *dummy)
         len = job->in->len;
         next = job->in->buf;
         check = CHECK(0L, Z_NULL, 0);
-        while (len > MAX2) {
-            check = CHECK(check, next, MAX2);
-            len -= MAX2;
-            next += MAX2;
+        while (len > MAXP2) {
+            check = CHECK(check, next, MAXP2);
+            len -= MAXP2;
+            next += MAXP2;
         }
         check = CHECK(check, next, (unsigned)len);
         drop_space(job->in);
@@ -1182,7 +1337,7 @@ local void compress_thread(void *dummy)
 
     /* found job with seq == -1 -- free deflate memory and return to join */
     release(compress_have);
-    deflateEnd(&strm);
+    (void)deflateEnd(&strm);
 }
 
 /* collect the write jobs off of the list in sequence order and write out the
@@ -1257,6 +1412,32 @@ local void write_thread(void *dummy)
     twist(write_first, TO, -1);
 }
 
+/* encode a hash hit to the block lengths list -- hit == 0 ends the list */
+local void append_len(struct job *job, size_t len)
+{
+    struct space *lens;
+
+    assert(len < 4227136UL);
+    if (job->lens == NULL)
+        job->lens = get_space(&lens_pool);
+    lens = job->lens;
+    if (lens->size < lens->len + 3)
+        grow_space(lens);
+    if (len < 64)
+        lens->buf[lens->len++] = len + 128;
+    else if (len < 32832U) {
+        len -= 64;
+        lens->buf[lens->len++] = len >> 8;
+        lens->buf[lens->len++] = len;
+    }
+    else {
+        len -= 32832U;
+        lens->buf[lens->len++] = (len >> 16) + 192;
+        lens->buf[lens->len++] = len >> 8;
+        lens->buf[lens->len++] = len;
+    }
+}
+
 /* compress ind to outd, using multiple threads for the compression and check
    value calculations and one other thread for writing the output -- compress
    threads will be launched and left running (waiting actually) to support
@@ -1264,10 +1445,19 @@ local void write_thread(void *dummy)
 local void parallel_compress(void)
 {
     long seq;                       /* sequence number */
-    struct space *prev;             /* previous input space */
-    struct space *next;             /* next input space */
+    struct space *curr;             /* input data to compress */
+    struct space *next;             /* input data that follows curr */
+    struct space *hold;             /* input data that follows next */
+    struct space *dict;             /* dictionary for next compression */
     struct job *job;                /* job for compress, then write */
     int more;                       /* true if more input to read */
+    unsigned hash;                  /* hash for rsyncable */
+    unsigned char *scan;            /* next byte to compute hash on */
+    unsigned char *tip;             /* after end of curr data */
+    unsigned char *end;             /* after end of data to compute hash on */
+    unsigned char *last;            /* position after last hit */
+    size_t left;                    /* last hit in curr to end of curr */
+    size_t len;                     /* for various length computations */
 
     /* if first time or after an option change, setup the job lists */
     setup_jobs();
@@ -1276,36 +1466,116 @@ local void parallel_compress(void)
     writeth = launch(write_thread, NULL);
 
     /* read from input and start compress threads (write thread will pick up
-       the output of the compress threads) */
+     the output of the compress threads) */
     seq = 0;
-    prev = NULL;
     next = get_space(&in_pool);
-    next->len = readn(ind, next->buf, next->pool->size);
+    next->len = readn(ind, next->buf, next->size);
+    hold = NULL;
+    dict = NULL;
+    scan = next->buf;
+    hash = 0;
+    left = 0;
     do {
-        /* create a new job, use next input chunk, previous as dictionary */
+        /* create a new job */
         job = malloc(sizeof(struct job));
         if (job == NULL)
             bail("not enough memory", "");
-        job->seq = seq;
-        job->in = next;
-        job->out = dict ? prev : NULL;  /* dictionary for compression */
         job->calc = new_lock(0);
 
-        /* check for end of file, reading next chunk if not sure */
-        if (next->len < next->pool->size)
-            more = 0;
-        else {
+        /* update input spaces */
+        curr = next;
+        next = hold;
+        hold = NULL;
+
+        /* get more input if we don't already have some */
+        if (next == NULL) {
             next = get_space(&in_pool);
-            next->len = readn(ind, next->buf, next->pool->size);
-            more = next->len != 0;
-            if (!more)
-                drop_space(next);       /* won't be using it */
-            if (dict && more) {
-                use_space(job->in);     /* hold as dictionary for next loop */
-                prev = job->in;
+            next->len = readn(ind, next->buf, next->size);
+        }
+
+        /* if rsyncable, generate block lengths and prepare curr for job to
+           likely have less than size bytes (up to the last hash hit) */
+        job->lens = NULL;
+        if (rsync && curr->len) {
+            /* compute the hash function starting where we last left off to
+               cover either size bytes or to EOF, whichever is less, through
+               the data in curr and next -- save the block lengths resulting
+               from the hash hits in the job->lens list */
+            last = left ? next->buf : curr->buf;
+            tip = curr->buf + curr->len;
+            len = curr->size - curr->len;
+            if (len > next->len)
+                len = next->len;
+            end = next->buf + len;
+            while (scan != end) {
+                hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
+                if (hash == RSYNCHIT) {
+                    len = (scan - last) + left;
+                    left = 0;
+                    append_len(job, len);
+                    last = scan;
+                }
+                if (scan == tip) {
+                    left = scan - last;
+                    scan = next->buf;
+                    last = scan;
+                }
+            }
+            append_len(job, 0);
+
+            /* create input in curr for job up to last hit or entire buffer if
+               no hits at all -- save remainder in next and possibly hold */
+            len = (job->lens->len == 1 ? scan : last) - next->buf;
+            if (len) {
+                /* got hits in next, or no hits in either -- copy to curr */
+                memcpy(curr->buf + curr->len, next->buf, len);
+                curr->len += len;
+                memmove(next->buf, next->buf + len, next->len - len);
+                next->len -= len;
+                scan -= len;
+                left = 0;
+            }
+            else if (job->lens->len != 1 && left) {
+                /* had hits in curr, but none in next, and last hit in curr
+                   wasn't right at the end, so we have input there to save --
+                   use curr up to the last hit, save the rest, moving next to
+                   hold */
+                hold = next;
+                next = get_space(&in_pool);
+                memcpy(next->buf, curr->buf + (curr->len - left), left);
+                next->len = left;
+                curr->len -= left;
+            }
+            /* else, last match happened to be right at the end of curr or
+               there is nothing in next -- curr can be used as is, and next,
+               scan, and left are set properly to continue scan next time
+               around */
+        }
+
+        /* compress curr->buf to curr->len -- compress thread will drop curr */
+        job->in = curr;
+
+        /* set job->more if there is more to compress after curr */
+        more = next->len != 0;
+        job->more = more;
+
+        /* provide dictionary for this job, prepare dictionary for next job */
+        job->out = dict;
+        if (more && setdict) {
+            if (curr->len >= DICT || job->out == NULL) {
+                dict = curr;
+                use_space(dict);
+            }
+            else {
+                dict = get_space(&dict_pool);
+                len = DICT - curr->len;
+                memcpy(dict->buf, job->out->buf + (job->out->len - len), len);
+                memcpy(dict->buf + len, curr->buf, curr->len);
             }
         }
-        job->more = more;
+
+        /* preparation of job is complete */
+        job->seq = seq;
         Trace(("-- read #%ld%s", seq, more ? "" : " (last)"));
         if (++seq < 1)
             bail("input too long: ", in);
@@ -1322,9 +1592,8 @@ local void parallel_compress(void)
         *compress_tail = job;
         compress_tail = &(job->next);
         twist(compress_have, BY, +1);
-
-        /* do until end of input */
     } while (more);
+    drop_space(next);
 
     /* wait for the write thread to complete (we leave the compress threads out
        there and waiting in case there is another stream to compress) */
@@ -1335,6 +1604,19 @@ local void parallel_compress(void)
 
 #endif
 
+/* repeated code in single_compress to compress available input and write it */
+#define DEFLATE_WRITE(flush) \
+    do { \
+        do { \
+            strm->avail_out = out_size; \
+            strm->next_out = out; \
+            (void)deflate(strm, flush); \
+            writen(outd, out, out_size - strm->avail_out); \
+            clen += out_size - strm->avail_out; \
+        } while (strm->avail_out == 0); \
+        assert(strm->avail_in == 0); \
+    } while (0)
+
 /* do a simple compression in a single thread from ind to outd -- if reset is
    true, instead free the memory that was allocated and retained for input,
    output, and deflate */
@@ -1342,6 +1624,13 @@ local void single_compress(int reset)
 {
     size_t got;                     /* amount read */
     size_t more;                    /* amount of next read (0 if eof) */
+    size_t start;                   /* start of next read */
+    unsigned hash;                  /* hash for rsyncable */
+#if ZLIB_VERNUM >= 0x1253
+    int bits;                       /* deflate pending bits */
+#endif
+    unsigned char *scan;            /* pointer for hash computation */
+    size_t left;                    /* bytes left to compress after hash hit */
     unsigned long head;             /* header length */
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
@@ -1353,7 +1642,7 @@ local void single_compress(int reset)
     /* if requested, just release the allocations and return */
     if (reset) {
         if (strm != NULL) {
-            deflateEnd(strm);
+            (void)deflateEnd(strm);
             free(strm);
             free(out);
             free(next);
@@ -1365,7 +1654,7 @@ local void single_compress(int reset)
 
     /* initialize the deflate structure if this is the first time */
     if (strm == NULL) {
-        out_size = size > MAX2 ? MAX2 : (unsigned)size;
+        out_size = size > MAXP2 ? MAXP2 : (unsigned)size;
         if ((in = malloc(size)) == NULL ||
             (next = malloc(size)) == NULL ||
             (out = malloc(out_size)) == NULL ||
@@ -1387,49 +1676,91 @@ local void single_compress(int reset)
     (void)deflateParams(strm, level, Z_DEFAULT_STRATEGY);
 
     /* do raw deflate and calculate check value */
-    ulen = clen = 0;
-    check = CHECK(0L, Z_NULL, 0);
+    got = 0;
     more = readn(ind, next, size);
+    ulen = (unsigned)more;
+    start = 0;
+    clen = 0;
+    check = CHECK(0L, Z_NULL, 0);
+    hash = 0;
     do {
         /* get data to compress, see if there is any more input */
-        got = more;
-        { unsigned char *temp; temp = in; in = next; next = temp; }
-        more = got < size ? 0 : readn(ind, next, size);
-        ulen += (unsigned long)got;
-        strm->next_in = in;
-
-        /* compress MAX2-size chunks in case unsigned type is small */
-        while (got > MAX2) {
-            strm->avail_in = MAX2;
-            check = CHECK(check, strm->next_in, strm->avail_in);
-            do {
-                strm->avail_out = out_size;
-                strm->next_out = out;
-                (void)deflate(strm, Z_NO_FLUSH);
-                writen(outd, out, out_size - strm->avail_out);
-                clen += out_size - strm->avail_out;
-            } while (strm->avail_out == 0);
-            assert(strm->avail_in == 0);
-            got -= MAX2;
+        if (got == 0) {
+            scan = in;  in = next;  next = scan;
+            strm->next_in = in + start;
+            got = more;
+            more = readn(ind, next, size);
+            ulen += (unsigned long)more;
+            start = 0;
         }
 
-        /* compress the remainder, finishing if end of input -- when not -i,
-           use a Z_SYNC_FLUSH so that this and parallel compression produce the
-           same output */
+        /* if rsyncable, compute hash until a hit or the end of the block */
+        left = 0;
+        if (rsync && got) {
+            scan = strm->next_in;
+            left = got;
+            do {
+                if (left == 0) {
+                    /* went to the end -- if no more or no hit in size bytes,
+                       then proceed to do a flush or finish with got bytes */
+                    if (more == 0 || got == size)
+                        break;
+
+                    /* fill in[] with what's left there and as much as possible
+                       from next[] -- set up to continue hash hit search */
+                    memmove(in, strm->next_in, got);
+                    strm->next_in = in;
+                    scan = in + got;
+                    left = more > size - got ? size - got : more;
+                    memcpy(scan, next + start, left);
+                    got += left;
+                    more -= left;
+                    start += left;
+
+                    /* if that emptied the next buffer, try to refill it */
+                    if (more == 0) {
+                        more = readn(ind, next, size);
+                        ulen += (unsigned long)more;
+                        start = 0;
+                    }
+                }
+                left--;
+                hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
+            } while (hash != RSYNCHIT);
+            got -= left;
+        }
+
+        /* compress MAXP2-size chunks in case unsigned type is small */
+        while (got > MAXP2) {
+            strm->avail_in = MAXP2;
+            check = CHECK(check, strm->next_in, strm->avail_in);
+            DEFLATE_WRITE(Z_NO_FLUSH);
+            got -= MAXP2;
+        }
+
+        /* compress the remainder, emit a block -- finish if end of input */
         strm->avail_in = (unsigned)got;
+        got = left;
         check = CHECK(check, strm->next_in, strm->avail_in);
-        do {
-            strm->avail_out = out_size;
-            strm->next_out = out;
-            (void)deflate(strm,
-                more ? (dict ? Z_SYNC_FLUSH : Z_FULL_FLUSH) : Z_FINISH);
-            writen(outd, out, out_size - strm->avail_out);
-            clen += out_size - strm->avail_out;
-        } while (strm->avail_out == 0);
-        assert(strm->avail_in == 0);
+        if (more || got) {
+#if ZLIB_VERNUM >= 0x1253
+            DEFLATE_WRITE(Z_BLOCK);
+            (void)deflatePending(strm, Z_NULL, &bits);
+            if (bits & 7)
+                DEFLATE_WRITE(Z_SYNC_FLUSH);
+#else
+            DEFLATE_WRITE(Z_SYNC_FLUSH);
+#endif
+        }
+        else
+            DEFLATE_WRITE(Z_FINISH);
+
+        /* clear history for --independent option */
+        if (!setdict)
+            (void)deflateReset(strm);
 
         /* do until no more input */
-    } while (more);
+    } while (more || got);
 
     /* write trailer */
     put_trailer(ulen, clen, check, head);
@@ -2930,7 +3261,7 @@ local char *helptext[] = {
 #endif
 "  -q, --quiet          Print no messages, even on error",
 "  -r, --recursive      Process the contents of all subdirectories",
-/* "  -R, --rsyncable      Input-determined block locations for rsync", */
+"  -R, --rsyncable      Input-determined block locations for rsync",
 "  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
 "  -t, --test           Test the integrity of the compressed input",
 "  -T, --no-time        Do not store or restore mod time in/from header",
@@ -2992,7 +3323,7 @@ local void defaults(void)
 #endif
     size = 131072UL;
     rsync = 0;                      /* don't do rsync blocking */
-    dict = 1;                       /* initialize dictionary each thread */
+    setdict = 1;                    /* initialize dictionary each thread */
     verbosity = 1;                  /* normal message level */
     headis = 3;                     /* store/restore name and timestamp */
     pipeout = 0;                    /* don't force output to stdout */
@@ -3108,8 +3439,7 @@ local int option(char *arg)
                 exit(0);
             case 'N':  headis = 3;  break;
             case 'T':  headis &= ~2;  break;
-            case 'R':  rsync = 1;
-                bail("invalid option: rsyncable not implemented yet: ", bad);
+            case 'R':  rsync = 1;  break;
             case 'S':  get = 3;  break;
             case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
@@ -3121,7 +3451,7 @@ local int option(char *arg)
             case 'd':  decode = 1;  headis = 0;  break;
             case 'f':  force = 1;  break;
             case 'h':  help();  break;
-            case 'i':  dict = 0;  break;
+            case 'i':  setdict = 0;  break;
             case 'k':  keep = 1;  break;
             case 'l':  list = 1;  break;
             case 'n':  headis &= ~1;  break;
@@ -3149,8 +3479,9 @@ local int option(char *arg)
             if (size < DICT)
                 bail("block size too small (must be >= 32K)", "");
             if (n != size >> 10 ||
-                size + (size >> 11) + 10 < size ||
-                (ssize_t)(size + (size >> 11) + 10) < 0)
+                OUTPOOL(size) < size ||
+                (ssize_t)OUTPOOL(size) < 0 ||
+                size > (1UL << 22))
                 bail("block size too large: ", arg);
             new_opts();
         }
@@ -3159,7 +3490,7 @@ local int option(char *arg)
             procs = (int)n;                     /* # processes */
             if (procs < 1)
                 bail("invalid number of processes: ", arg);
-            if ((size_t)procs != n || ((procs << 1) + 2) < 1)
+            if ((size_t)procs != n || INBUFS(procs) < 1)
                 bail("too many processes: ", arg);
 #ifdef NOTHREAD
             if (procs > 1)
