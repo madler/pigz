@@ -125,6 +125,7 @@
                        Change macro name MAX to MAX2 to avoid library conflicts
                        Determine number of processors on HP-UX [Lloyd]
    2.1.8  xx Dec 2011  Check for expansion bound busting (e.g. modified zlib)
+                       Fix construction and printing of 32-bit check values
  */
 
 #define VERSION "pigz 2.1.8\n"
@@ -1561,7 +1562,7 @@ local void in_init(void)
 /* buffered reading macros for decompression and listing */
 #define GET() (in_eof || (in_left == 0 && load() == 0) ? EOF : \
                (in_left--, *in_next++))
-#define GET2() (tmp2 = GET(), tmp2 + (GET() << 8))
+#define GET2() (tmp2 = GET(), tmp2 + ((unsigned)(GET()) << 8))
 #define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
 #define SKIP(dist) \
     do { \
@@ -1574,6 +1575,12 @@ local void in_init(void)
         in_left -= togo; \
         in_next += togo; \
     } while (0)
+
+/* pull LSB order or MSB order integers from an unsigned char buffer */
+#define PULL2L(p) ((p)[0] + ((unsigned)((p)[1]) << 8))
+#define PULL4L(p) (PULL2L(p) + ((unsigned long)(PULL2L((p) + 2)) << 16))
+#define PULL2M(p) (((unsigned)((p)[0]) << 8) + (p)[1])
+#define PULL4M(p) (((unsigned long)(PULL2M(p)) << 16) + PULL2M((p) + 2))
 
 /* convert MS-DOS date and time to a Unix time, assuming current timezone
    (you got a better idea?) */
@@ -1965,7 +1972,7 @@ local void list_info(void)
             in_tot = at;
             lseek(ind, -4, SEEK_END);
             readn(ind, tail, 4);
-            check = (*tail << 24) + (tail[1] << 16) + (tail[2] << 8) + tail[3];
+            check = PULL4M(tail);
         }
         in_tot -= 6;
         show_info(method, check, 0, 0);
@@ -2037,8 +2044,8 @@ local void list_info(void)
     }
 
     /* convert trailer to check and uncompressed length (modulo 2^32) */
-    check = tail[0] + (tail[1] << 8) + (tail[2] << 16) + (tail[3] << 24);
-    len = tail[4] + (tail[5] << 8) + (tail[6] << 16) + (tail[7] << 24);
+    check = PULL4L(tail);
+    len = PULL4L(tail + 4);
 
     /* list information about contents */
     show_info(method, check, len, 0);
@@ -2270,7 +2277,7 @@ local void infchk(void)
         else if (form == 1) {       /* zlib (big-endian) trailer */
             check = (unsigned long)(GET()) << 24;
             check += (unsigned long)(GET()) << 16;
-            check += GET() << 8;
+            check += (unsigned)(GET()) << 8;
             check += GET();
             if (in_eof)
                 bail("corrupted zlib stream -- missing trailer: ", in);
