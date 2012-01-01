@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011 Mark Adler
- * Version 2.2  xx Dec 2011  Mark Adler
+ * Version 2.2  31 Dec 2011  Mark Adler
  */
 
 /*
@@ -124,7 +124,8 @@
                        Fix thread synchronization problem when tracing
                        Change macro name MAX to MAX2 to avoid library conflicts
                        Determine number of processors on HP-UX [Lloyd]
-   2.2    xx Dec 2011  Check for expansion bound busting (e.g. modified zlib)
+   2.2    31 Dec 2011  Check for expansion bound busting (e.g. modified zlib)
+                       Make the "threads" list head global variable volatile
                        Fix construction and printing of 32-bit check values
                        Add --rsyncable functionality
  */
