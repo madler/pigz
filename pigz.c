@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.1  xx Jan 2012  Mark Adler
+ * Version 2.2.1  1 Jan 2012  Mark Adler
  */
 
 /*
@@ -128,7 +128,7 @@
                        Make the "threads" list head global variable volatile
                        Fix construction and printing of 32-bit check values
                        Add --rsyncable functionality
-   2.2.1  xx Jan 2012  -
+   2.2.1   1 Jan 2012  Fix bug in --rsyncable buffer management
  */
 
 #define VERSION "pigz 2.2.1\n"
@@ -1455,7 +1455,6 @@ local void parallel_compress(void)
     int more;                       /* true if more input to read */
     unsigned hash;                  /* hash for rsyncable */
     unsigned char *scan;            /* next byte to compute hash on */
-    unsigned char *tip;             /* after end of curr data */
     unsigned char *end;             /* after end of data to compute hash on */
     unsigned char *last;            /* position after last hit */
     size_t left;                    /* last hit in curr to end of curr */
@@ -1503,23 +1502,39 @@ local void parallel_compress(void)
                cover either size bytes or to EOF, whichever is less, through
                the data in curr and next -- save the block lengths resulting
                from the hash hits in the job->lens list */
-            last = left ? next->buf : curr->buf;
-            tip = curr->buf + curr->len;
+            if (left == 0) {
+                /* scan is in curr */
+                last = curr->buf;
+                end = curr->buf + curr->len;
+                while (scan < end) {
+                    hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
+                    if (hash == RSYNCHIT) {
+                        len = scan - last;
+                        append_len(job, len);
+                        last = scan;
+                    }
+                }
+
+                /* continue scan in next */
+                left = scan - last;
+                scan = next->buf;
+            }
+
+            /* scan in next for enough bytes to fill curr, or what is available
+               in next, whichever is less (if next isn't full, then we're at
+               the end of the file) -- the bytes in curr since the last hit,
+               stored in left, counts towards the size of the first block */
+            last = next->buf;
             len = curr->size - curr->len;
             if (len > next->len)
                 len = next->len;
             end = next->buf + len;
-            while (scan != end) {
+            while (scan < end) {
                 hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
                 if (hash == RSYNCHIT) {
                     len = (scan - last) + left;
                     left = 0;
                     append_len(job, len);
-                    last = scan;
-                }
-                if (scan == tip) {
-                    left = scan - last;
-                    scan = next->buf;
                     last = scan;
                 }
             }
@@ -3433,7 +3448,8 @@ local int option(char *arg)
             case 'K':  form = 2;  sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007, 2008, 2009, 2010 Mark Adler\n",
+                fputs("Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012"
+                      " Mark Adler\n",
                       stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
