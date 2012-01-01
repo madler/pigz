@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.2  xx Jan 2012  Mark Adler
+ * Version 2.2.2  1 Jan 2012  Mark Adler
  */
 
 /*
@@ -129,7 +129,7 @@
                        Fix construction and printing of 32-bit check values
                        Add --rsyncable functionality
    2.2.1   1 Jan 2012  Fix bug in --rsyncable buffer management
-   2.2.2  xx Jan 2012  -
+   2.2.2   1 Jan 2012  Fix another bug in --rsyncable buffer management
  */
 
 #define VERSION "pigz 2.2.2\n"
