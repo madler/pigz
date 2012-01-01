@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007, 2008, 2009, 2010, 2011 Mark Adler
- * Version 2.2  31 Dec 2011  Mark Adler
+ * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
+ * Version 2.2.1  xx Jan 2012  Mark Adler
  */
 
 /*
@@ -128,9 +128,10 @@
                        Make the "threads" list head global variable volatile
                        Fix construction and printing of 32-bit check values
                        Add --rsyncable functionality
+   2.2.1  xx Jan 2012  -
  */
 
-#define VERSION "pigz 2.2\n"
+#define VERSION "pigz 2.2.1\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
