@@ -373,9 +373,10 @@
    retained to undo its impact on the hash value, as is needed for a sum.
 
    The choice of the comparison value (RSYNCHIT) has the virtue of avoiding
-   extremely short blocks.  The shortest possible block is six bytes, whereas
-   with the gzip rsyncable algorithm, blocks of one byte were not only
-   possible, but in fact were the most likely block size.
+   extremely short blocks.  The shortest possible block is four bytes
+   (RSYNCBITS-8) and is unlikely, whereas with the gzip rsyncable algorithm,
+   blocks of one byte were not only possible, but in fact were the most likely
+   block size.
 
    Thanks and acknowledgement to Kevin Day for his experimentation and insights
    on rsyncable hash characteristics that led to some of the choices here.
@@ -1564,10 +1565,10 @@ local void parallel_compress(void)
                 next->len = left;
                 curr->len -= left;
             }
-            /* else, last match happened to be right at the end of curr or
-               there is nothing in next -- curr can be used as is, and next,
-               scan, and left are set properly to continue scan next time
-               around */
+            else {
+                /* else, last match happened to be right at the end of curr */
+                left = 0;
+            }
         }
 
         /* compress curr->buf to curr->len -- compress thread will drop curr */
