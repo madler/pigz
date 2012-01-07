@@ -132,6 +132,7 @@
    2.2.2   1 Jan 2012  Fix another bug in --rsyncable buffer management
    2.2.3  xx Jan 2012  Remove volatile in yarn.c
                        Reduce the number of input buffers
+                       Change initial rsyncable hash to comparison value
  */
 
 #define VERSION "pigz 2.2.3\n"
@@ -1480,7 +1481,7 @@ local void parallel_compress(void)
     hold = NULL;
     dict = NULL;
     scan = next->buf;
-    hash = 0;
+    hash = RSYNCHIT;
     left = 0;
     do {
         /* create a new job */
@@ -1705,7 +1706,7 @@ local void single_compress(int reset)
     start = 0;
     clen = 0;
     check = CHECK(0L, Z_NULL, 0);
-    hash = 0;
+    hash = RSYNCHIT;
     do {
         /* get data to compress, see if there is any more input */
         if (got == 0) {
