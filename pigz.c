@@ -133,6 +133,7 @@
    2.2.3  xx Jan 2012  Remove volatile in yarn.c
                        Reduce the number of input buffers
                        Change initial rsyncable hash to comparison value
+                       Improve the efficiency of arriving at a byte boundary
  */
 
 #define VERSION "pigz 2.2.3\n"
@@ -1292,9 +1293,19 @@ local void compress_thread(void *dummy)
             if (left || job->more) {
 #if ZLIB_VERNUM >= 0x1253
                 deflate_engine(&strm, job->out, Z_BLOCK);
+
+                /* add just enough empty blocks to get to a byte boundary */
                 (void)deflatePending(&strm, Z_NULL, &bits);
-                if (bits & 7)
+                if (bits & 1)
                     deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+                else if (bits & 7) {
+                    do {
+                        bits = deflatePrime(&strm, 10, 2);  /* static empty */
+                        assert(bits == Z_OK);
+                        (void)deflatePending(&strm, Z_NULL, &bits);
+                    } while (bits & 7);
+                    deflate_engine(&strm, job->out, Z_BLOCK);
+                }
 #else
                 deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
 #endif
@@ -1770,8 +1781,13 @@ local void single_compress(int reset)
 #if ZLIB_VERNUM >= 0x1253
             DEFLATE_WRITE(Z_BLOCK);
             (void)deflatePending(strm, Z_NULL, &bits);
-            if (bits & 7)
+            if (bits & 1)
                 DEFLATE_WRITE(Z_SYNC_FLUSH);
+            else while (bits & 7) {
+                bits = deflatePrime(strm, 10, 2);
+                assert(bits == Z_OK);
+                (void)deflatePending(strm, Z_NULL, &bits);
+            }
 #else
             DEFLATE_WRITE(Z_SYNC_FLUSH);
 #endif
