@@ -130,7 +130,7 @@
                        Add --rsyncable functionality
    2.2.1   1 Jan 2012  Fix bug in --rsyncable buffer management
    2.2.2   1 Jan 2012  Fix another bug in --rsyncable buffer management
-   2.2.3  xx Jan 2012  -
+   2.2.3  xx Jan 2012  Remove volatile in yarn.c
  */
 
 #define VERSION "pigz 2.2.3\n"
