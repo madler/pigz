@@ -131,6 +131,7 @@
    2.2.1   1 Jan 2012  Fix bug in --rsyncable buffer management
    2.2.2   1 Jan 2012  Fix another bug in --rsyncable buffer management
    2.2.3  xx Jan 2012  Remove volatile in yarn.c
+                       Reduce the number of input buffers
  */
 
 #define VERSION "pigz 2.2.3\n"
@@ -392,7 +393,7 @@
    spaces as a function of the number of processors (used to throttle the
    creation of compression jobs), OUTPOOL is the initial size of the output
    data buffer, chosen to make resizing of the buffer very unlikely */
-#define INBUFS(p) (((p)<<1)+(p)+2)
+#define INBUFS(p) (((p)<<1)+3)
 #define OUTPOOL(s) ((s)+((s)>>4))
 
 /* globals (modified by main thread only when it's the only thread) */
