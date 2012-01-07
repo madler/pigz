@@ -155,9 +155,11 @@
 
    Each partial raw deflate stream is terminated by an empty stored block
    (using the Z_SYNC_FLUSH option of zlib), in order to end that partial bit
-   stream at a byte boundary.  That allows the partial streams to be
-   concatenated simply as sequences of bytes.  This adds a very small four to
-   five byte overhead to the output for each input chunk.
+   stream at a byte boundary, unless that partial stream happens to already end
+   at a byte boundary (the latter requires zlib 1.2.6 or later).  Ending on a
+   byte boundary allows the partial streams to be concatenated simply as
+   sequences of bytes.  This adds a very small four to five byte overhead
+   (average 3.75 bytes) to the output for each input chunk.
 
    The default input block size is 128K, but can be changed with the -b option.
    The number of compress threads is set by default to 8, which can be changed
@@ -213,10 +215,10 @@
    jobs until instructed to return.  When a job is pulled, the dictionary, if
    provided, will be loaded into the deflate engine and then that input buffer
    is dropped for reuse.  Then the input data is compressed into an output
-   buffer sized to assure that it can contain maximally expanded deflate data.
-   The job is then put into the write job list, sorted by the sequence number.
-   The compress thread however continues to calculate the check value on the
-   input data, either a CRC-32 or Adler-32, possibly in parallel with the write
+   buffer that grows in size if necessary to hold the compressed data. The job
+   is then put into the write job list, sorted by the sequence number. The
+   compress thread however continues to calculate the check value on the input
+   data, either a CRC-32 or Adler-32, possibly in parallel with the write
    thread writing the output data.  Once that's done, the compress thread drops
    the input buffer and also releases the lock on the check value so that the
    write thread can combine it with the previous check values.  The compress
@@ -260,7 +262,7 @@
    to compression, that number allows a second set of buffers to be read while
    the first set of compressions are being performed.  The number of output
    buffers is not directly limited, but is indirectly limited by the release of
-   input buffers to the same number.
+   input buffers to about the same number.
  */
 
 /* use large file functions if available */
@@ -374,9 +376,9 @@
    retained to undo its impact on the hash value, as is needed for a sum.
 
    The choice of the comparison value (RSYNCHIT) has the virtue of avoiding
-   extremely short blocks.  The shortest possible block is four bytes
-   (RSYNCBITS-8) and is unlikely, whereas with the gzip rsyncable algorithm,
-   blocks of one byte were not only possible, but in fact were the most likely
+   extremely short blocks.  The shortest block is five bytes (RSYNCBITS-7) from
+   hit to hit, and is unlikely.  Whereas with the gzip rsyncable algorithm,
+   blocks of one byte are not only possible, but in fact are the most likely
    block size.
 
    Thanks and acknowledgement to Kevin Day for his experimentation and insights
@@ -919,7 +921,7 @@ struct space {
     struct space *next;     /* for pool linked list */
 };
 
-/* pool of spaces (one pool for each size needed) */
+/* pool of spaces (one pool for each type needed) */
 struct pool {
     lock *have;             /* unused spaces available, lock for list */
     struct space *head;     /* linked list of available buffers */
