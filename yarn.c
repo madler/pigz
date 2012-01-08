@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
- * Copyright (C) 2008 Mark Adler
- * Version 1.1  26 Oct 2008  Mark Adler
+ * Copyright (C) 2008, 2012 Mark Adler
+ * Version 1.2  8 Jan 2012  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -13,11 +13,17 @@
    1.0    19 Oct 2008  First version
    1.1    26 Oct 2008  No need to set the stack size -- remove
                        Add yarn_abort() function for clean-up on error exit
+   1.2     8 Jan 2012  Add large file #define for consistency with pigz.c
+                       Update thread portability #defines per IEEE 1003.1-2008
  */
 
 /* for thread portability */
-#define _POSIX_PTHREAD_SEMANTICS
-#define _REENTRANT
+#define _XOPEN_SOURCE 700
+#define _POSIX_C_SOURCE 200809L
+#define _THREAD_SAFE
+
+/* use large file functions if available */
+#define _FILE_OFFSET_BITS 64
 
 /* external libraries and entities referenced */
 #include <stdio.h>      /* fprintf(), stderr */

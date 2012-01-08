@@ -134,6 +134,7 @@
                        Reduce the number of input buffers
                        Change initial rsyncable hash to comparison value
                        Improve the efficiency of arriving at a byte boundary
+                       Add thread portability #defines from yarn.c
  */
 
 #define VERSION "pigz 2.2.3\n"
@@ -267,6 +268,11 @@
    buffers is not directly limited, but is indirectly limited by the release of
    input buffers to about the same number.
  */
+
+/* for thread portability */
+#define _XOPEN_SOURCE 700
+#define _POSIX_C_SOURCE 200809L
+#define _THREAD_SAFE
 
 /* use large file functions if available */
 #define _FILE_OFFSET_BITS 64
