@@ -1789,10 +1789,13 @@ local void single_compress(int reset)
             (void)deflatePending(strm, Z_NULL, &bits);
             if (bits & 1)
                 DEFLATE_WRITE(Z_SYNC_FLUSH);
-            else while (bits & 7) {
-                bits = deflatePrime(strm, 10, 2);
-                assert(bits == Z_OK);
-                (void)deflatePending(strm, Z_NULL, &bits);
+            else if (bits & 7) {
+                do {
+                    bits = deflatePrime(strm, 10, 2);
+                    assert(bits == Z_OK);
+                    (void)deflatePending(strm, Z_NULL, &bits);
+                } while (bits & 7);
+                DEFLATE_WRITE(Z_NO_FLUSH);
             }
 #else
             DEFLATE_WRITE(Z_SYNC_FLUSH);
