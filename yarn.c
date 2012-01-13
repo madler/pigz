@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
  * Copyright (C) 2008, 2012 Mark Adler
- * Version 1.2  13 Jan 2012  Mark Adler
+ * Version 1.3  13 Jan 2012  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -13,7 +13,8 @@
    1.0    19 Oct 2008  First version
    1.1    26 Oct 2008  No need to set the stack size -- remove
                        Add yarn_abort() function for clean-up on error exit
-   1.2    13 Jan 2012  Add large file #define for consistency with pigz.c
+   1.2    19 Dec 2011  (changes reversed in 1.3)
+   1.3    13 Jan 2012  Add large file #define for consistency with pigz.c
                        Update thread portability #defines per IEEE 1003.1-2008
                        Fix documentation in yarn.h for yarn_prefix
  */
