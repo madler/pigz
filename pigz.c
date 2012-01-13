@@ -135,6 +135,7 @@
                        Change initial rsyncable hash to comparison value
                        Improve the efficiency of arriving at a byte boundary
                        Add thread portability #defines from yarn.c
+                       Have rsyncable compression be independent of threading
  */
 
 #define VERSION "pigz 2.2.3\n"
@@ -1524,8 +1525,9 @@ local void parallel_compress(void)
         if (rsync && curr->len) {
             /* compute the hash function starting where we last left off to
                cover either size bytes or to EOF, whichever is less, through
-               the data in curr and next -- save the block lengths resulting
-               from the hash hits in the job->lens list */
+               the data in curr (and in the next loop, through next) -- save
+               the block lengths resulting from the hash hits in the job->lens
+               list */
             if (left == 0) {
                 /* scan is in curr */
                 last = curr->buf;
@@ -1576,7 +1578,7 @@ local void parallel_compress(void)
                 scan -= len;
                 left = 0;
             }
-            else if (job->lens->len != 1 && left) {
+            else if (job->lens->len != 1 && left && next->len) {
                 /* had hits in curr, but none in next, and last hit in curr
                    wasn't right at the end, so we have input there to save --
                    use curr up to the last hit, save the rest, moving next to
@@ -1588,7 +1590,8 @@ local void parallel_compress(void)
                 curr->len -= left;
             }
             else {
-                /* else, last match happened to be right at the end of curr */
+                /* else, last match happened to be right at the end of curr,
+                   or we're at the end of the input compressing the rest */
                 left = 0;
             }
         }
@@ -1666,6 +1669,7 @@ local void single_compress(int reset)
     size_t got;                     /* amount read */
     size_t more;                    /* amount of next read (0 if eof) */
     size_t start;                   /* start of next read */
+    size_t block;                   /* bytes in current block for -i */
     unsigned hash;                  /* hash for rsyncable */
 #if ZLIB_VERNUM >= 0x1253
     int bits;                       /* deflate pending bits */
@@ -1722,6 +1726,7 @@ local void single_compress(int reset)
     ulen = (unsigned)more;
     start = 0;
     clen = 0;
+    block = 0;
     check = CHECK(0L, Z_NULL, 0);
     hash = RSYNCHIT;
     do {
@@ -1771,6 +1776,15 @@ local void single_compress(int reset)
             got -= left;
         }
 
+        /* clear history for --independent option */
+        if (!setdict) {
+            block += got;
+            if (block > size) {
+                (void)deflateReset(strm);
+                block = got;
+            }
+        }
+
         /* compress MAXP2-size chunks in case unsigned type is small */
         while (got > MAXP2) {
             strm->avail_in = MAXP2;
@@ -1803,10 +1817,6 @@ local void single_compress(int reset)
         }
         else
             DEFLATE_WRITE(Z_FINISH);
-
-        /* clear history for --independent option */
-        if (!setdict)
-            (void)deflateReset(strm);
 
         /* do until no more input */
     } while (more || got);
