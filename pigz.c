@@ -136,6 +136,7 @@
                        Improve the efficiency of arriving at a byte boundary
                        Add thread portability #defines from yarn.c
                        Have rsyncable compression be independent of threading
+                       Fix bug where constructed dictionaries not being used
  */
 
 #define VERSION "pigz 2.2.3\n"
@@ -1615,6 +1616,7 @@ local void parallel_compress(void)
                 len = DICT - curr->len;
                 memcpy(dict->buf, job->out->buf + (job->out->len - len), len);
                 memcpy(dict->buf + len, curr->buf, curr->len);
+                dict->len = DICT;
             }
         }
 
