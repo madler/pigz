@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.3  15 Jan 2012  Mark Adler
+ * Version 2.2.4  xx Jan 2012  Mark Adler
  */
 
 /*
@@ -137,6 +137,7 @@
                        Add thread portability #defines from yarn.c
                        Have rsyncable compression be independent of threading
                        Fix bug where constructed dictionaries not being used
+   2.2.4  xx Jan 2012  -
  */
 
 #define VERSION "pigz 2.2.3\n"
