@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.3  xx Jan 2012  Mark Adler
+ * Version 2.2.3  15 Jan 2012  Mark Adler
  */
 
 /*
@@ -130,7 +130,7 @@
                        Add --rsyncable functionality
    2.2.1   1 Jan 2012  Fix bug in --rsyncable buffer management
    2.2.2   1 Jan 2012  Fix another bug in --rsyncable buffer management
-   2.2.3  xx Jan 2012  Remove volatile in yarn.c
+   2.2.3  15 Jan 2012  Remove volatile in yarn.c
                        Reduce the number of input buffers
                        Change initial rsyncable hash to comparison value
                        Improve the efficiency of arriving at a byte boundary
