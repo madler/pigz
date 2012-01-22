@@ -304,6 +304,9 @@
 #include <dirent.h>     /* opendir(), readdir(), closedir(), DIR, */
                         /* struct dirent */
 #include <limits.h>     /* PATH_MAX, UINT_MAX */
+#if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
+#  include <inttypes.h> /* intmax_t */
+#endif
 
 #ifdef __hpux
 #  include <sys/param.h>
@@ -2304,15 +2307,25 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
         if ((form == 3 && !decode) ||
             (method == 8 && in_tot > (len + (len >> 10) + 12)) ||
             (method == 256 && in_tot > len + (len >> 1) + 3))
-            printf(sizeof(off_t) == 4 ? "%10lu %10lu?  unk    %s\n" :
-                                        "%10llu %10llu?  unk    %s\n",
+#if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
+            printf("%10jd %10jd?  unk    %s\n",
+                   (intmax_t)in_tot, (intmax_t)len, name);
+        else
+            printf("%10jd %10jd %6.1f%%  %s\n",
+                   (intmax_t)in_tot, (intmax_t)len,
+                   len == 0 ? 0 : 100 * (len - in_tot)/(double)len,
+                   name);
+#else
+            printf(sizeof(off_t) == sizeof(long) ?
+                   "%10ld %10ld?  unk    %s\n" : "%10lld %10lld?  unk    %s\n",
                    in_tot, len, name);
         else
-            printf(sizeof(off_t) == 4 ? "%10lu %10lu %6.1f%%  %s\n" :
-                                        "%10llu %10llu %6.1f%%  %s\n",
+            printf(sizeof(off_t) == sizeof(long) ?
+                   "%10ld %10ld %6.1f%%  %s\n" : "%10lld %10lld %6.1f%%  %s\n",
                    in_tot, len,
                    len == 0 ? 0 : 100 * (len - in_tot)/(double)len,
                    name);
+#endif
     }
 }
 
