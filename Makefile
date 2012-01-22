@@ -39,12 +39,15 @@ test: pigz
 	(printf "w" | gzip ; printf "x") | ./pigz -cdf | wc -c | test `cat` -eq 2
 	(printf "w" | gzip ; printf "xy") | ./pigz -cdf | wc -c | test `cat` -eq 3
 	(printf "w" | gzip ; printf "xyz") | ./pigz -cdf | wc -c | test `cat` -eq 4
-	compress -f < pigz.c | ./unpigz | cmp - pigz.c
-	rm -f pigz.c.gz pigz.c.zz pigz.c.zip
+	-@if whereis compress > /dev/null; then \
+	  echo 'compress -f < pigz.c | ./unpigz | cmp - pigz.c' ;\
+	  compress -f < pigz.c | ./unpigz | cmp - pigz.c ;\
+	fi
+	@rm -f pigz.c.gz pigz.c.zz pigz.c.zip
 
 tests: dev test
 	./pigzn -kf pigz.c ; ./pigz -t pigz.c.gz
-	rm -f pigz.c.gz
+	@rm -f pigz.c.gz
 
 docs: pigz.pdf
 
@@ -52,4 +55,4 @@ pigz.pdf: pigz.1
 	groff -mandoc -f H -T ps pigz.1 | ps2pdf - pigz.pdf
 
 clean:
-	rm -f *.o pigz unpigz pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
+	@rm -f *.o pigz unpigz pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
