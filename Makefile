@@ -39,7 +39,7 @@ test: pigz
 	(printf "w" | gzip ; printf "x") | ./pigz -cdf | wc -c | test `cat` -eq 2
 	(printf "w" | gzip ; printf "xy") | ./pigz -cdf | wc -c | test `cat` -eq 3
 	(printf "w" | gzip ; printf "xyz") | ./pigz -cdf | wc -c | test `cat` -eq 4
-	-@if whereis compress > /dev/null; then \
+	-@if test "`whereis compress`" != ""; then \
 	  echo 'compress -f < pigz.c | ./unpigz | cmp - pigz.c' ;\
 	  compress -f < pigz.c | ./unpigz | cmp - pigz.c ;\
 	fi
