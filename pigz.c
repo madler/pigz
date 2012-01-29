@@ -1219,7 +1219,7 @@ local void compress_thread(void *dummy)
     unsigned char *next;            /* pointer for blocks, check value data */
     size_t left;                    /* input left to process */
     size_t len;                     /* remaining bytes to compress/check */
-#if ZLIB_VERNUM >= 0x1253
+#if ZLIB_VERNUM >= 0x1260
     int bits;                       /* deflate pending bits */
 #endif
     z_stream strm;                  /* deflate stream */
@@ -1303,7 +1303,7 @@ local void compress_thread(void *dummy)
                if this is the last block */
             strm.avail_in = (unsigned)len;
             if (left || job->more) {
-#if ZLIB_VERNUM >= 0x1253
+#if ZLIB_VERNUM >= 0x1260
                 deflate_engine(&strm, job->out, Z_BLOCK);
 
                 /* add just enough empty blocks to get to a byte boundary */
@@ -1677,7 +1677,7 @@ local void single_compress(int reset)
     size_t start;                   /* start of next read */
     size_t block;                   /* bytes in current block for -i */
     unsigned hash;                  /* hash for rsyncable */
-#if ZLIB_VERNUM >= 0x1253
+#if ZLIB_VERNUM >= 0x1260
     int bits;                       /* deflate pending bits */
 #endif
     unsigned char *scan;            /* pointer for hash computation */
@@ -1804,7 +1804,7 @@ local void single_compress(int reset)
         got = left;
         check = CHECK(check, strm->next_in, strm->avail_in);
         if (more || got) {
-#if ZLIB_VERNUM >= 0x1253
+#if ZLIB_VERNUM >= 0x1260
             DEFLATE_WRITE(Z_BLOCK);
             (void)deflatePending(strm, Z_NULL, &bits);
             if (bits & 1)
