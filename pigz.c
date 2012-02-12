@@ -2931,7 +2931,6 @@ local char *justname(char *path)
    (again if allowed), and the access and modify times are copied. */
 local void copymeta(char *from, char *to)
 {
-    int ret;
     struct stat st;
     struct timeval times[2];
 
@@ -2940,30 +2939,29 @@ local void copymeta(char *from, char *to)
         return;
 
     /* set to's mode bits, ignore errors */
-    ret = chmod(to, st.st_mode & 07777);
+    (void)chmod(to, st.st_mode & 07777);
 
     /* copy owner's user and group, ignore errors */
-    ret = chown(to, st.st_uid, st.st_gid);
+    (void)chown(to, st.st_uid, st.st_gid);
 
     /* copy access and modify times, ignore errors */
     times[0].tv_sec = st.st_atime;
     times[0].tv_usec = 0;
     times[1].tv_sec = st.st_mtime;
     times[1].tv_usec = 0;
-    ret = utimes(to, times);
+    (void)utimes(to, times);
 }
 
 /* set the access and modify times of fd to t */
 local void touch(char *path, time_t t)
 {
-    int ret;
     struct timeval times[2];
 
     times[0].tv_sec = t;
     times[0].tv_usec = 0;
     times[1].tv_sec = t;
     times[1].tv_usec = 0;
-    ret = utimes(path, times);
+    (void)utimes(path, times);
 }
 
 /* process provided input file, or stdin if path is NULL -- process() can
