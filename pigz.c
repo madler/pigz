@@ -787,7 +787,7 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
         PUT2L(tail + 8, 1);         /* number of entries on this disk */
         PUT2L(tail + 10, 1);        /* total number of entries */
         PUT4L(tail + 12, cent);     /* size of central directory */
-        PUT4L(tail + 16, head + clen + 12); /* offset of central directory */
+        PUT4L(tail + 16, head + clen + 16); /* offset of central directory */
         PUT2L(tail + 20, 0);        /* no zip file comment */
         writen(outd, tail, 22);     /* write end of central directory record */
     }
