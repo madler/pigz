@@ -272,11 +272,6 @@
    input buffers to about the same number.
  */
 
-/* for thread portability */
-#define _XOPEN_SOURCE 600
-#define _POSIX_C_SOURCE 200112L
-#define _THREAD_SAFE
-
 /* use large file functions if available */
 #define _FILE_OFFSET_BITS 64
 
