@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.4  xx Jan 2012  Mark Adler
+ * Version 2.2.4  11 Mar 2012  Mark Adler
  */
 
 /*
@@ -137,10 +137,16 @@
                        Add thread portability #defines from yarn.c
                        Have rsyncable compression be independent of threading
                        Fix bug where constructed dictionaries not being used
-   2.2.4  xx Jan 2012  -
+   2.2.4  11 Mar 2012  Avoid some return value warnings
+                       Improve the portability of printing the off_t type
+                       Check for existence of compress binary before using
+                       Update zlib version checking to 1.2.6 for new functions
+                       Fix bug in zip (-K) output
+                       Fix license in pigz.spec
+                       Remove thread portability #defines in pigz.c
  */
 
-#define VERSION "pigz 2.2.3\n"
+#define VERSION "pigz 2.2.4\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
