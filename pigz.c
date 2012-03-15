@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.4  11 Mar 2012  Mark Adler
+ * Version 2.2.5  xx Apr 2012  Mark Adler
  */
 
 /*
@@ -144,9 +144,10 @@
                        Fix bug in zip (-K) output
                        Fix license in pigz.spec
                        Remove thread portability #defines in pigz.c
+   2.2.5  xx Apr 2012  -
  */
 
-#define VERSION "pigz 2.2.4\n"
+#define VERSION "pigz 2.2.5\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
