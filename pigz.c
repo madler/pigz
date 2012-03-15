@@ -1082,9 +1082,9 @@ local int free_pool(struct pool *pool)
         free(space);
         count++;
     }
+    assert(count == pool->made);
     release(pool->have);
     free_lock(pool->have);
-    assert(count == pool->made);
     return count;
 }
 
