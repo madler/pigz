@@ -2266,6 +2266,8 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
     else if (hname == NULL) {
         n = strlen(in) - compressed_suffix(in);
         strncpy(name, in, n > max + 1 ? max + 1 : n);
+        if (strcmp(in + n, ".tgz") == 0 && n < max + 1)
+            strncpy(name + n, ".tar", max + 1 - n);
     }
     else
         strncpy(name, hname, max + 1);
@@ -3213,7 +3215,7 @@ local void process(char *path)
                  " (use -f to force)");
     }
     else {
-        char *to;
+        char *to, *repl;
 
         /* use header name for output when decompressing with -N */
         to = in;
@@ -3222,12 +3224,15 @@ local void process(char *path)
             len = strlen(hname);
         }
 
+        /* replace .tgx with .tar when decoding */
+        repl = decode && strcmp(to + len, ".tgz") ? "" : ".tar";
+
         /* create output file and open to write */
-        out = malloc(len + (decode ? 0 : strlen(sufx)) + 1);
+        out = malloc(len + (decode ? strlen(repl) : strlen(sufx)) + 1);
         if (out == NULL)
             bail("not enough memory", "");
         memcpy(out, to, len);
-        strcpy(out + len, decode ? "" : sufx);
+        strcpy(out + len, decode ? repl : sufx);
         outd = open(out, O_CREAT | O_TRUNC | O_WRONLY |
                          (force ? 0 : O_EXCL), 0666);
 
