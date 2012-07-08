@@ -3641,15 +3641,15 @@ int main(int argc, char **argv)
         option(NULL);
     }
 
-    /* if no command line arguments and stdout is a terminal, show help */
-    if (argc < 2 && isatty(1))
-        help();
-
     /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
     if (strcmp(prog, "unpigz") == 0 || strcmp(prog, "gunzip") == 0)
         decode = 1, headis = 0;
     if ((n = strlen(prog)) > 2 && strcmp(prog + n - 3, "cat") == 0)
         decode = 1, headis = 0, pipeout = 1;
+
+    /* if no arguments and compressed data to or from a terminal, show help */
+    if (argc < 2 && isatty(decode ? 0 : 1))
+        help();
 
     /* process command-line arguments, no options after "--" */
     done = noop = 0;
