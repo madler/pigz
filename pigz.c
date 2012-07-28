@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.5  xx Apr 2012  Mark Adler
+ * Version 2.2.5  28 Jul 2012  Mark Adler
  */
 
 /*
@@ -144,7 +144,11 @@
                        Fix bug in zip (-K) output
                        Fix license in pigz.spec
                        Remove thread portability #defines in pigz.c
-   2.2.5  xx Apr 2012  -
+   2.2.5  28 Jul 2012  Avoid race condition in free_pool()
+                       Change suffix to .tar when decompressing or listing .tgz
+                       Print name of executable in error messages
+                       Show help properly when the name is unpigz or gunzip
+                       Fix permissions security problem before output is closed
  */
 
 #define VERSION "pigz 2.2.5\n"
