@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.5  28 Jul 2012  Mark Adler
+ * Version 2.2.6  xx Oct 2012  Mark Adler
  */
 
 /*
@@ -149,9 +149,10 @@
                        Print name of executable in error messages
                        Show help properly when the name is unpigz or gunzip
                        Fix permissions security problem before output is closed
+   2.2.6  xx Oct 2012  -
  */
 
-#define VERSION "pigz 2.2.5\n"
+#define VERSION "pigz 2.2.6\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
