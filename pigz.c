@@ -3119,8 +3119,8 @@ local void process(char *path)
             return;
         }
 
-        /* only decompress over input file with compressed suffix */
-        if (decode && !pipeout) {
+        /* create output file only if input file has compressed suffix */
+        if (decode == 1 && !pipeout && !list) {
             int suf = compressed_suffix(in);
             if (suf == 0) {
                 complain("%s does not have compressed suffix -- skipping", in);
