@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Mark Adler
- * Version 2.2.6  xx Oct 2012  Mark Adler
+ * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Mark Adler
+ * Version 2.2.6  xx Jan 2013  Mark Adler
  */
 
 /*
@@ -149,7 +149,7 @@
                        Print name of executable in error messages
                        Show help properly when the name is unpigz or gunzip
                        Fix permissions security problem before output is closed
-   2.2.6  xx Oct 2012  -
+   2.2.6  xx Jan 2013  -
  */
 
 #define VERSION "pigz 2.2.6\n"
@@ -3492,7 +3492,7 @@ local int option(char *arg)
             case 'K':  form = 2;  sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012"
+                fputs("Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013"
                       " Mark Adler\n",
                       stderr);
                 fputs("Subject to the terms of the zlib license.\n",
