@@ -2730,9 +2730,9 @@ local void infchk(void)
             cont = 1;
         }
 
-        /* if a gzip or zlib entry follows a gzip or zlib entry, decompress it
-           (don't replace saved header information from first entry) */
-    } while (g.form < 2 && (ret = get_header(0)) == 8 && g.form < 2);
+        /* if a gzip entry follows a gzip entry, decompress it (don't replace
+           saved header information from first entry) */
+    } while (g.form == 0 && (ret = get_header(0)) == 8 && g.form == 0);
 
     /* gzip -cdf copies junk after gzip stream directly to output */
     if (g.form < 2 && ret == -2 && g.force && g.pipeout && g.decode != 2 &&
