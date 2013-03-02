@@ -2085,11 +2085,13 @@ local int read_extra(unsigned len, int save)
     return 0;
 }
 
-/* read a gzip, zip, zlib, or lzw header from ind and extract useful
-   information, return the method -- or on error return negative: -1 is
-   immediate EOF, -2 is not a recognized compressed format, -3 is premature EOF
-   within the header, -4 is unexpected header flag values; a method of 256 is
-   lzw -- set form to indicate gzip, zlib, or zip */
+/* read a gzip, zip, zlib, or lzw header from ind and return the method in the
+   range 0..256 (256 implies a zip method greater than 255), or on error return
+   negative: -1 is immediate EOF, -2 is not a recognized compressed format, -3
+   is premature EOF within the header, -4 is unexpected header flag values, -5
+   is the zip end of central directory; a method of 257 is lzw -- if the return
+   value is not negative, then get_header() sets g.form to indicate gzip (0),
+   zlib (1), or zip (2, or 3 if the entry is followed by a data descriptor) */
 local int get_header(int save)
 {
     unsigned magic;             /* magic header */
@@ -2119,19 +2121,24 @@ local int get_header(int save)
         return (int)((magic >> 8) & 0xf);
     }
     if (magic == 0x1f9d)            /* it's lzw */
-        return 256;
+        return 257;
     if (magic == 0x504b) {          /* it's zip */
-        if (GET() != 3 || GET() != 4)
+        magic = GET2();             /* the rest of the signature */
+        if (in_eof)
             return -3;
+        if (magic == 0x0606 || magic == 0x0605)
+            return -5;              /* end record */
+        if (magic != 0x0403)
+            return -4;              /* not a local header */
         SKIP(2);
         flags = GET2();
         if (in_eof)
             return -3;
         if (flags & 0xfff0)
             return -4;
-        method = GET2();
-        if (flags & 1)              /* encrypted */
-            method = 255;           /* mark as unknown method */
+        method = GET();             /* return low byte of method or 256 */
+        if (GET() != 0 || flags & 1)
+            method = 256;           /* unknown or encrypted */
         if (in_eof)
             return -3;
         if (save)
@@ -2330,7 +2337,7 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
             printf("zip%3d  %08lx  %s  ", method, check, mod + 4);
         else if (g.form)
             printf("zlib%2d  %08lx  %s  ", method, check, mod + 4);
-        else if (method == 256)
+        else if (method == 257)
             printf("lzw     --------  %s  ", mod + 4);
         else
             printf("gzip%2d  %08lx  %s  ", method, check, mod + 4);
@@ -2338,7 +2345,7 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
     if (g.verbosity > 0) {
         if ((g.form == 3 && !g.decode) ||
             (method == 8 && in_tot > (len + (len >> 10) + 12)) ||
-            (method == 256 && in_tot > len + (len >> 1) + 3))
+            (method == 257 && in_tot > len + (len >> 1) + 3))
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
             printf("%10jd %10jd?  unk    %s\n",
                    (intmax_t)in_tot, (intmax_t)len, tag);
@@ -2416,7 +2423,7 @@ local void list_info(void)
     }
 
     /* list lzw file */
-    if (method == 256) {
+    if (method == 257) {
         at = lseek(g.ind, 0, SEEK_END);
         if (at == -1)
             while (load() != 0)
@@ -3156,7 +3163,7 @@ local void process(char *path)
     if (g.decode) {
         in_init();
         method = get_header(1);
-        if (method != 8 && method != 256 &&
+        if (method != 8 && method != 257 &&
                 /* gzip -cdf acts like cat on uncompressed input */
                 !(method == -2 && g.force && g.pipeout && g.decode != 2 &&
                   !g.list)) {
@@ -3271,7 +3278,7 @@ local void process(char *path)
     if (g.decode) {
         if (method == 8)
             infchk();
-        else if (method == 256)
+        else if (method == 257)
             unlzw();
         else
             cat();
