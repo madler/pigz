@@ -335,6 +335,7 @@
                         /* lock, new_lock(), possess(), twist(), wait_for(),
                            release(), peek_lock(), free_lock(), yarn_name */
 #endif
+#include "zopfli/deflate.h"     /* DeflatePart(), Options */
 
 /* for local functions and globals */
 #define local static
@@ -413,9 +414,10 @@
 /* initial pool counts and sizes -- INBUFS is the limit on the number of input
    spaces as a function of the number of processors (used to throttle the
    creation of compression jobs), OUTPOOL is the initial size of the output
-   data buffer, chosen to make resizing of the buffer very unlikely */
+   data buffer, chosen to make resizing of the buffer very unlikely and to
+   allow prepending with a dictionary for use as an input buffer for zopfli */
 #define INBUFS(p) (((p)<<1)+3)
-#define OUTPOOL(s) ((s)+((s)>>4))
+#define OUTPOOL(s) ((s)+((s)>>4)+DICT)
 
 /* input buffer size */
 #define BUF 32768U
@@ -753,7 +755,7 @@ local unsigned long put_header(void)
     }
     else if (g.form) {              /* zlib */
         head[0] = 0x78;             /* deflate, 32K window */
-        head[1] = (g.level == 9 ? 3 :
+        head[1] = (g.level >= 9 ? 3 :
                    (g.level == 1 ? 0 :
                     (g.level >= 6 || g.level == Z_DEFAULT_COMPRESSION ?
                         1 : 2))) << 6;
@@ -767,7 +769,7 @@ local unsigned long put_header(void)
         head[2] = 8;                /* deflate */
         head[3] = g.name != NULL ? 8 : 0;
         PUT4L(head + 4, g.mtime);
-        head[8] = g.level == 9 ? 2 : (g.level == 1 ? 4 : 0);
+        head[8] = g.level >= 9 ? 2 : (g.level == 1 ? 4 : 0);
         head[9] = 3;                /* unix */
         writen(g.outd, head, 10);
         len = 10;
@@ -1274,6 +1276,8 @@ local void compress_thread(void *dummy)
 #if ZLIB_VERNUM >= 0x1260
     int bits;                       /* deflate pending bits */
 #endif
+    struct space *temp;             /* temporary space for zopfli input */
+    Options opts;                   /* zopfli options */
     z_stream strm;                  /* deflate stream */
 
     (void)dummy;
@@ -1282,8 +1286,7 @@ local void compress_thread(void *dummy)
     strm.zfree = Z_NULL;
     strm.zalloc = Z_NULL;
     strm.opaque = Z_NULL;
-    if (deflateInit2(&strm, g.level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) !=
-            Z_OK)
+    if (deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
         bail("not enough memory", "");
 
     /* keep looking for work */
@@ -1304,22 +1307,46 @@ local void compress_thread(void *dummy)
            deflateParams() is called immediately after deflateReset(), there is
            no need to initialize the input/output for the stream) */
         Trace(("-- compressing #%ld", job->seq));
-        (void)deflateReset(&strm);
-        (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
+        if (g.level <= 9) {
+            (void)deflateReset(&strm);
+            (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
+        }
+        else {
+            /* default zopfli options as set by InitOptions():
+                 verbose = 0
+                 numiterations = 15
+                 blocksplitting = 1
+                 blocksplittinglast = 0
+                 blocksplittingmax = 15
+             */
+            InitOptions(&opts);
+            temp = get_space(&out_pool);
+            temp->len = 0;
+        }
 
         /* set dictionary if provided, release that input or dictionary buffer
            (not NULL if dict is true and if this is not the first work unit) */
         if (job->out != NULL) {
             len = job->out->len;
             left = len < DICT ? len : DICT;
-            deflateSetDictionary(&strm, job->out->buf + (len - left), left);
+            if (g.level <= 9)
+                deflateSetDictionary(&strm, job->out->buf + (len - left),
+                                     left);
+            else {
+                memcpy(temp->buf, job->out->buf + (len - left), left);
+                temp->len = left;
+            }
             drop_space(job->out);
         }
 
         /* set up input and output */
         job->out = get_space(&out_pool);
-        strm.next_in = job->in->buf;
-        strm.next_out = job->out->buf;
+        if (g.level <= 9) {
+            strm.next_in = job->in->buf;
+            strm.next_out = job->out->buf;
+        }
+        else
+            memcpy(temp->buf + temp->len, job->in->buf, job->in->len);
 
         /* compress each block, either flushing or finishing */
         next = job->lens == NULL ? NULL : job->lens->buf;
@@ -1340,43 +1367,82 @@ local void compress_thread(void *dummy)
             }
             left -= len;
 
-            /* run MAXP2-sized amounts of input through deflate -- this loop is
-               needed for those cases where the unsigned type is smaller than
-               the size_t type, or when len is close to the limit of the size_t
-               type */
-            while (len > MAXP2) {
-                strm.avail_in = MAXP2;
-                deflate_engine(&strm, job->out, Z_NO_FLUSH);
-                len -= MAXP2;
-            }
-
-            /* run the last piece through deflate -- end on a byte boundary,
-               using a sync marker if necessary, or finish the deflate stream
-               if this is the last block */
-            strm.avail_in = (unsigned)len;
-            if (left || job->more) {
-#if ZLIB_VERNUM >= 0x1260
-                deflate_engine(&strm, job->out, Z_BLOCK);
-
-                /* add just enough empty blocks to get to a byte boundary */
-                (void)deflatePending(&strm, Z_NULL, &bits);
-                if (bits & 1)
-                    deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
-                else if (bits & 7) {
-                    do {
-                        bits = deflatePrime(&strm, 10, 2);  /* static empty */
-                        assert(bits == Z_OK);
-                        (void)deflatePending(&strm, Z_NULL, &bits);
-                    } while (bits & 7);
-                    deflate_engine(&strm, job->out, Z_BLOCK);
+            if (g.level <= 9) {
+                /* run MAXP2-sized amounts of input through deflate -- this
+                   loop is needed for those cases where the unsigned type is
+                   smaller than the size_t type, or when len is close to the
+                   limit of the size_t type */
+                while (len > MAXP2) {
+                    strm.avail_in = MAXP2;
+                    deflate_engine(&strm, job->out, Z_NO_FLUSH);
+                    len -= MAXP2;
                 }
+
+                /* run the last piece through deflate -- end on a byte
+                   boundary, using a sync marker if necessary, or finish the
+                   deflate stream if this is the last block */
+                strm.avail_in = (unsigned)len;
+                if (left || job->more) {
+#if ZLIB_VERNUM >= 0x1260
+                    deflate_engine(&strm, job->out, Z_BLOCK);
+
+                    /* add enough empty blocks to get to a byte boundary */
+                    (void)deflatePending(&strm, Z_NULL, &bits);
+                    if (bits & 1)
+                        deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+                    else if (bits & 7) {
+                        do {        /* add static empty blocks */
+                            bits = deflatePrime(&strm, 10, 2);
+                            assert(bits == Z_OK);
+                            (void)deflatePending(&strm, Z_NULL, &bits);
+                        } while (bits & 7);
+                        deflate_engine(&strm, job->out, Z_BLOCK);
+                    }
 #else
-                deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+                    deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
 #endif
+                }
+                else
+                    deflate_engine(&strm, job->out, Z_FINISH);
             }
-            else
-                deflate_engine(&strm, job->out, Z_FINISH);
+            else {
+                /* compress len bytes using zopfli, bring to byte boundary */
+                unsigned char bits, *out;
+                size_t outsize;
+
+                out = NULL;
+                outsize = 0;
+                bits = 0;
+                DeflatePart(&opts, 2, !(left || job->more),
+                            temp->buf, temp->len, temp->len + len,
+                            &bits, &out, &outsize);
+                assert(job->out->len + outsize + 5 <= job->out->size);
+                memcpy(job->out->buf + job->out->len, out, outsize);
+                free(out);
+                job->out->len += outsize;
+                if (left || job->more) {
+                    bits &= 7;
+                    if (bits & 1) {
+                        if (bits == 7)
+                            job->out->buf[job->out->len++] = 0;
+                        job->out->buf[job->out->len++] = 0;
+                        job->out->buf[job->out->len++] = 0;
+                        job->out->buf[job->out->len++] = 0xff;
+                        job->out->buf[job->out->len++] = 0xff;
+                    }
+                    else if (bits) {
+                        do {
+                            job->out->buf[job->out->len - 1] += 2 << bits;
+                            job->out->buf[job->out->len++] = 0;
+                            bits += 2;
+                        } while (bits < 8);
+                    }
+                }
+                temp->len += len;
+            }
         } while (left);
+        if (g.level > 9)
+            drop_space(temp);
         if (job->lens != NULL) {
             drop_space(job->lens);
             job->lens = NULL;
@@ -1766,8 +1832,8 @@ local void single_compress(int reset)
         strm->zfree = Z_NULL;
         strm->zalloc = Z_NULL;
         strm->opaque = Z_NULL;
-        if (deflateInit2(strm, g.level, Z_DEFLATED, -15, 8,
-                         Z_DEFAULT_STRATEGY) != Z_OK)
+        if (deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) !=
+                         Z_OK)
             bail("not enough memory", "");
     }
 
@@ -1775,6 +1841,8 @@ local void single_compress(int reset)
     head = put_header();
 
     /* set compression level in case it changed */
+    if (g.level > 9)
+        bail("compression level 11 not yet implemented for one thread", "");
     (void)deflateReset(strm);
     (void)deflateParams(strm, g.level, Z_DEFAULT_STRATEGY);
 
@@ -3325,7 +3393,8 @@ local char *helptext[] = {
 #endif
 "",
 "Options:",
-"  -0 to -9, --fast, --best   Compression levels, --fast is -1, --best is -9",
+"  -0 to -9, -11        Compression level (11 is much slower, a few % better)",
+"  --fast, --best       Compression levels 1 and 9 respectively",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
 "  -d, --decompress     Decompress the compressed input",
@@ -3509,6 +3578,10 @@ local int option(char *arg)
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
                 g.level = *arg - '0';
+                while (arg[1] >= '0' && arg[1] <= '9')
+                    g.level = g.level * 10 + *++arg - '0';
+                if (g.level == 10 || g.level > 11)
+                    bail("only levels 0..9 and 11 are allowed", "");
                 new_opts();
                 break;
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
