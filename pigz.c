@@ -417,6 +417,9 @@
 #define INBUFS(p) (((p)<<1)+3)
 #define OUTPOOL(s) ((s)+((s)>>4))
 
+/* input buffer size */
+#define BUF 32768U
+
 /* globals (modified by main thread only when it's the only thread) */
 local struct {
     char *prog;             /* name by which pigz was invoked */
@@ -451,6 +454,25 @@ local struct {
     unsigned long zip_crc;      /* local header crc */
     unsigned long zip_clen;     /* local header compressed length */
     unsigned long zip_ulen;     /* local header uncompressed length */
+
+    /* globals for decompression and listing buffered reading */
+    unsigned char in_buf[BUF];  /* input buffer */
+    unsigned char *in_next; /* next unused byte in buffer */
+    size_t in_left;         /* number of unused bytes in buffer */
+    int in_eof;             /* true if reached end of file on input */
+    int in_short;           /* true if last read didn't fill buffer */
+    off_t in_tot;           /* total bytes read from input */
+    off_t out_tot;          /* total bytes written to output */
+    unsigned long out_check;    /* check value of output */
+
+#ifndef NOTHREAD
+    /* globals for decompression parallel reading */
+    unsigned char in_buf2[BUF]; /* second buffer for parallel reads */
+    size_t in_len;          /* data waiting in next buffer */
+    int in_which;           /* -1: start, 0: in_buf2, 1: in_buf */
+    lock *load_state;       /* value = 0 to wait, 1 to read a buffer */
+    thread *load_thread;    /* load_read() thread for joining */
+#endif
 } g;
 
 /* display a complaint with the program name on stderr */
@@ -1863,26 +1885,7 @@ local void single_compress(int reset)
 
 /* --- decompression --- */
 
-/* globals for decompression and listing buffered reading */
-#define BUF 32768U                  /* input buffer size */
-local unsigned char in_buf[BUF];    /* input buffer */
-local unsigned char *in_next;       /* next unused byte in buffer */
-local size_t in_left;               /* number of unused bytes in buffer */
-local int in_eof;                   /* true if reached end of file on input */
-local int in_short;                 /* true if last read didn't fill buffer */
-local off_t in_tot;                 /* total bytes read from input */
-local off_t out_tot;                /* total bytes written to output */
-local unsigned long out_check;      /* check value of output */
-
 #ifndef NOTHREAD
-/* parallel reading */
-
-local unsigned char in_buf2[BUF];   /* second buffer for parallel reads */
-local size_t in_len;                /* data waiting in next buffer */
-local int in_which;                 /* -1: start, 0: in_buf2, 1: in_buf */
-local lock *load_state;             /* value = 0 to wait, 1 to read a buffer */
-local thread *load_thread;          /* load_read() thread for joining */
-
 /* parallel read thread */
 local void load_read(void *dummy)
 {
@@ -1892,28 +1895,27 @@ local void load_read(void *dummy)
 
     Trace(("-- launched decompress read thread"));
     do {
-        possess(load_state);
-        wait_for(load_state, TO_BE, 1);
-        in_len = len = readn(g.ind, in_which ? in_buf : in_buf2, BUF);
+        possess(g.load_state);
+        wait_for(g.load_state, TO_BE, 1);
+        g.in_len = len = readn(g.ind, g.in_which ? g.in_buf : g.in_buf2, BUF);
         Trace(("-- decompress read thread read %lu bytes", len));
-        twist(load_state, TO, 0);
+        twist(g.load_state, TO, 0);
     } while (len == BUF);
     Trace(("-- exited decompress read thread"));
 }
-
 #endif
 
 /* load() is called when the input has been consumed in order to provide more
-   input data: load the input buffer with BUF or less bytes (less if at end of
-   file) from the file ind, set in_next to point to the in_left bytes read,
-   update in_tot, and return in_left -- in_eof is set to true when in_left has
-   gone to zero and there is no more data left to read from ind */
+   input data: load the input buffer with BUF or fewer bytes (fewer if at end
+   of file) from the file g.ind, set g.in_next to point to the g.in_left bytes
+   read, update g.in_tot, and return g.in_left -- g.in_eof is set to true when
+   g.in_left has gone to zero and there is no more data left to read */
 local size_t load(void)
 {
     /* if already detected end of file, do nothing */
-    if (in_short) {
-        in_eof = 1;
-        in_left = 0;
+    if (g.in_short) {
+        g.in_eof = 1;
+        g.in_left = 0;
         return 0;
     }
 
@@ -1922,84 +1924,84 @@ local size_t load(void)
        return, otherwise wait for the previous read job to complete */
     if (g.procs > 1) {
         /* if first time, fire up the read thread, ask for a read */
-        if (in_which == -1) {
-            in_which = 1;
-            load_state = new_lock(1);
-            load_thread = launch(load_read, NULL);
+        if (g.in_which == -1) {
+            g.in_which = 1;
+            g.load_state = new_lock(1);
+            g.load_thread = launch(load_read, NULL);
         }
 
         /* wait for the previously requested read to complete */
-        possess(load_state);
-        wait_for(load_state, TO_BE, 0);
-        release(load_state);
+        possess(g.load_state);
+        wait_for(g.load_state, TO_BE, 0);
+        release(g.load_state);
 
         /* set up input buffer with the data just read */
-        in_next = in_which ? in_buf : in_buf2;
-        in_left = in_len;
+        g.in_next = g.in_which ? g.in_buf : g.in_buf2;
+        g.in_left = g.in_len;
 
         /* if not at end of file, alert read thread to load next buffer,
-           alternate between in_buf and in_buf2 */
-        if (in_len == BUF) {
-            in_which = 1 - in_which;
-            possess(load_state);
-            twist(load_state, TO, 1);
+           alternate between g.in_buf and g.in_buf2 */
+        if (g.in_len == BUF) {
+            g.in_which = 1 - g.in_which;
+            possess(g.load_state);
+            twist(g.load_state, TO, 1);
         }
 
         /* at end of file -- join read thread (already exited), clean up */
         else {
-            join(load_thread);
-            free_lock(load_state);
-            in_which = -1;
+            join(g.load_thread);
+            free_lock(g.load_state);
+            g.in_which = -1;
         }
     }
     else
 #endif
     {
-        /* don't use threads -- simply read a buffer into in_buf */
-        in_left = readn(g.ind, in_next = in_buf, BUF);
+        /* don't use threads -- simply read a buffer into g.in_buf */
+        g.in_left = readn(g.ind, g.in_next = g.in_buf, BUF);
     }
 
     /* note end of file */
-    if (in_left < BUF) {
-        in_short = 1;
+    if (g.in_left < BUF) {
+        g.in_short = 1;
 
         /* if we got bupkis, now is the time to mark eof */
-        if (in_left == 0)
-            in_eof = 1;
+        if (g.in_left == 0)
+            g.in_eof = 1;
     }
 
     /* update the total and return the available bytes */
-    in_tot += in_left;
-    return in_left;
+    g.in_tot += g.in_left;
+    return g.in_left;
 }
 
 /* initialize for reading new input */
 local void in_init(void)
 {
-    in_left = 0;
-    in_eof = 0;
-    in_short = 0;
-    in_tot = 0;
+    g.in_left = 0;
+    g.in_eof = 0;
+    g.in_short = 0;
+    g.in_tot = 0;
 #ifndef NOTHREAD
-    in_which = -1;
+    g.in_which = -1;
 #endif
 }
 
 /* buffered reading macros for decompression and listing */
-#define GET() (in_eof || (in_left == 0 && load() == 0) ? EOF : \
-               (in_left--, *in_next++))
+#define GET() (g.in_eof || (g.in_left == 0 && load() == 0) ? EOF : \
+               (g.in_left--, *g.in_next++))
 #define GET2() (tmp2 = GET(), tmp2 + ((unsigned)(GET()) << 8))
 #define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
 #define SKIP(dist) \
     do { \
         size_t togo = (dist); \
-        while (togo > in_left) { \
-            togo -= in_left; \
+        while (togo > g.in_left) { \
+            togo -= g.in_left; \
             if (load() == 0) \
                 return -1; \
         } \
-        in_left -= togo; \
-        in_next += togo; \
+        g.in_left -= togo; \
+        g.in_next += togo; \
     } while (0)
 
 /* pull LSB order or MSB order integers from an unsigned char buffer */
@@ -2044,7 +2046,7 @@ local int read_extra(unsigned len, int save)
     while (len >= 4) {
         id = GET2();
         size = GET2();
-        if (in_eof)
+        if (g.in_eof)
             return -1;
         len -= 4;
         if (size > len)
@@ -2110,11 +2112,11 @@ local int get_header(int save)
     /* see if it's a gzip, zlib, or lzw file */
     g.form = 0;
     g.magic1 = GET();
-    if (in_eof)
+    if (g.in_eof)
         return -1;
     magic = g.magic1 << 8;
     magic += GET();
-    if (in_eof)
+    if (g.in_eof)
         return -2;
     if (magic % 31 == 0) {          /* it's zlib */
         g.form = 1;
@@ -2124,7 +2126,7 @@ local int get_header(int save)
         return 257;
     if (magic == 0x504b) {          /* it's zip */
         magic = GET2();             /* the rest of the signature */
-        if (in_eof)
+        if (g.in_eof)
             return -3;
         if (magic == 0x0606 || magic == 0x0605)
             return -5;              /* end record */
@@ -2132,14 +2134,14 @@ local int get_header(int save)
             return -4;              /* not a local header */
         SKIP(2);
         flags = GET2();
-        if (in_eof)
+        if (g.in_eof)
             return -3;
         if (flags & 0xfff0)
             return -4;
         method = GET();             /* return low byte of method or 256 */
         if (GET() != 0 || flags & 1)
             method = 256;           /* unknown or encrypted */
-        if (in_eof)
+        if (g.in_eof)
             return -3;
         if (save)
             g.stamp = dos2time(GET4());
@@ -2154,16 +2156,16 @@ local int get_header(int save)
             char *next = g.hname = malloc(fname + 1);
             if (g.hname == NULL)
                 bail("not enough memory", "");
-            while (fname > in_left) {
-                memcpy(next, in_next, in_left);
-                fname -= in_left;
-                next += in_left;
+            while (fname > g.in_left) {
+                memcpy(next, g.in_next, g.in_left);
+                fname -= g.in_left;
+                next += g.in_left;
                 if (load() == 0)
                     return -3;
             }
-            memcpy(next, in_next, fname);
-            in_left -= fname;
-            in_next += fname;
+            memcpy(next, g.in_next, fname);
+            g.in_left -= fname;
+            g.in_next += fname;
             next += fname;
             *next = 0;
         }
@@ -2171,18 +2173,18 @@ local int get_header(int save)
             SKIP(fname);
         read_extra(extra, save);
         g.form = 2 + ((flags & 8) >> 3);
-        return in_eof ? -3 : method;
+        return g.in_eof ? -3 : method;
     }
     if (magic != 0x1f8b) {          /* not gzip */
-        in_left++;      /* unget second magic byte */
-        in_next--;
+        g.in_left++;    /* unget second magic byte */
+        g.in_next--;
         return -2;
     }
 
     /* it's gzip -- get method and flags */
     method = GET();
     flags = GET();
-    if (in_eof)
+    if (g.in_eof)
         return -1;
     if (flags & 0xe0)
         return -4;
@@ -2199,7 +2201,7 @@ local int get_header(int save)
     /* skip extra field, if present */
     if (flags & 4) {
         extra = GET2();
-        if (in_eof)
+        if (g.in_eof)
             return -3;
         SKIP(extra);
     }
@@ -2213,10 +2215,10 @@ local int get_header(int save)
             bail("not enough memory", "");
         have = 0;
         do {
-            if (in_left == 0 && load() == 0)
+            if (g.in_left == 0 && load() == 0)
                 return -3;
-            end = memchr(in_next, 0, in_left);
-            copy = end == NULL ? in_left : (size_t)(end - in_next) + 1;
+            end = memchr(g.in_next, 0, g.in_left);
+            copy = end == NULL ? g.in_left : (size_t)(end - g.in_next) + 1;
             if (have + copy > size) {
                 while (have + copy > (size <<= 1))
                     ;
@@ -2224,21 +2226,21 @@ local int get_header(int save)
                 if (g.hname == NULL)
                     bail("not enough memory", "");
             }
-            memcpy(g.hname + have, in_next, copy);
+            memcpy(g.hname + have, g.in_next, copy);
             have += copy;
-            in_left -= copy;
-            in_next += copy;
+            g.in_left -= copy;
+            g.in_next += copy;
         } while (end == NULL);
     }
     else if (flags & 8)
         while (GET() != 0)
-            if (in_eof)
+            if (g.in_eof)
                 return -3;
 
     /* skip comment */
     if (flags & 16)
         while (GET() != 0)
-            if (in_eof)
+            if (g.in_eof)
                 return -3;
 
     /* skip header crc */
@@ -2344,25 +2346,25 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
     }
     if (g.verbosity > 0) {
         if ((g.form == 3 && !g.decode) ||
-            (method == 8 && in_tot > (len + (len >> 10) + 12)) ||
-            (method == 257 && in_tot > len + (len >> 1) + 3))
+            (method == 8 && g.in_tot > (len + (len >> 10) + 12)) ||
+            (method == 257 && g.in_tot > len + (len >> 1) + 3))
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
             printf("%10jd %10jd?  unk    %s\n",
-                   (intmax_t)in_tot, (intmax_t)len, tag);
+                   (intmax_t)g.in_tot, (intmax_t)len, tag);
         else
             printf("%10jd %10jd %6.1f%%  %s\n",
-                   (intmax_t)in_tot, (intmax_t)len,
-                   len == 0 ? 0 : 100 * (len - in_tot)/(double)len,
+                   (intmax_t)g.in_tot, (intmax_t)len,
+                   len == 0 ? 0 : 100 * (len - g.in_tot)/(double)len,
                    tag);
 #else
             printf(sizeof(off_t) == sizeof(long) ?
                    "%10ld %10ld?  unk    %s\n" : "%10lld %10lld?  unk    %s\n",
-                   in_tot, len, tag);
+                   g.in_tot, len, tag);
         else
             printf(sizeof(off_t) == sizeof(long) ?
                    "%10ld %10ld %6.1f%%  %s\n" : "%10lld %10lld %6.1f%%  %s\n",
-                   in_tot, len,
-                   len == 0 ? 0 : 100 * (len - in_tot)/(double)len,
+                   g.in_tot, len,
+                   len == 0 ? 0 : 100 * (len - g.in_tot)/(double)len,
                    tag);
 #endif
     }
@@ -2393,7 +2395,7 @@ local void list_info(void)
 
     /* list zip file */
     if (g.form > 1) {
-        in_tot = g.zip_clen;
+        g.in_tot = g.zip_clen;
         show_info(method, g.zip_crc, g.zip_ulen, 0);
         return;
     }
@@ -2404,20 +2406,20 @@ local void list_info(void)
         if (at == -1) {
             check = 0;
             do {
-                len = in_left < 4 ? in_left : 4;
-                in_next += in_left - len;
+                len = g.in_left < 4 ? g.in_left : 4;
+                g.in_next += g.in_left - len;
                 while (len--)
-                    check = (check << 8) + *in_next++;
+                    check = (check << 8) + *g.in_next++;
             } while (load() != 0);
             check &= LOW32;
         }
         else {
-            in_tot = at;
+            g.in_tot = at;
             lseek(g.ind, -4, SEEK_END);
             readn(g.ind, tail, 4);
             check = PULL4M(tail);
         }
-        in_tot -= 6;
+        g.in_tot -= 6;
         show_info(method, check, 0, 0);
         return;
     }
@@ -2429,48 +2431,48 @@ local void list_info(void)
             while (load() != 0)
                 ;
         else
-            in_tot = at;
-        in_tot -= 3;
+            g.in_tot = at;
+        g.in_tot -= 3;
         show_info(method, 0, 0, 0);
         return;
     }
 
     /* skip to end to get trailer (8 bytes), compute compressed length */
-    if (in_short) {                     /* whole thing already read */
-        if (in_left < 8) {
+    if (g.in_short) {                   /* whole thing already read */
+        if (g.in_left < 8) {
             complain("%s not a valid gzip file -- skipping", g.inf);
             return;
         }
-        in_tot = in_left - 8;           /* compressed size */
-        memcpy(tail, in_next + (in_left - 8), 8);
+        g.in_tot = g.in_left - 8;       /* compressed size */
+        memcpy(tail, g.in_next + (g.in_left - 8), 8);
     }
     else if ((at = lseek(g.ind, -8, SEEK_END)) != -1) {
-        in_tot = at - in_tot + in_left; /* compressed size */
+        g.in_tot = at - g.in_tot + g.in_left;   /* compressed size */
         readn(g.ind, tail, 8);          /* get trailer */
     }
     else {                              /* can't seek */
-        at = in_tot - in_left;          /* save header size */
+        at = g.in_tot - g.in_left;      /* save header size */
         do {
-            n = in_left < 8 ? in_left : 8;
-            memcpy(tail, in_next + (in_left - n), n);
+            n = g.in_left < 8 ? g.in_left : 8;
+            memcpy(tail, g.in_next + (g.in_left - n), n);
             load();
-        } while (in_left == BUF);       /* read until end */
-        if (in_left < 8) {
-            if (n + in_left < 8) {
+        } while (g.in_left == BUF);     /* read until end */
+        if (g.in_left < 8) {
+            if (n + g.in_left < 8) {
                 complain("%s not a valid gzip file -- skipping", g.inf);
                 return;
             }
-            if (in_left) {
-                if (n + in_left > 8)
-                    memcpy(tail, tail + n - (8 - in_left), 8 - in_left);
-                memcpy(tail + 8 - in_left, in_next, in_left);
+            if (g.in_left) {
+                if (n + g.in_left > 8)
+                    memcpy(tail, tail + n - (8 - g.in_left), 8 - g.in_left);
+                memcpy(tail + 8 - g.in_left, g.in_next, g.in_left);
             }
         }
         else
-            memcpy(tail, in_next + (in_left - 8), 8);
-        in_tot -= at + 8;
+            memcpy(tail, g.in_next + (g.in_left - 8), 8);
+        g.in_tot -= at + 8;
     }
-    if (in_tot < 2) {
+    if (g.in_tot < 2) {
         complain("%s not a valid gzip file -- skipping", g.inf);
         return;
     }
@@ -2490,15 +2492,15 @@ local void cat(void)
 {
     /* write first magic byte (if we're here, there's at least one byte) */
     writen(g.outd, &g.magic1, 1);
-    out_tot = 1;
+    g.out_tot = 1;
 
     /* copy the remainder of the input to the output (if there were any more
-       bytes of input, then in_left is non-zero and in_next is pointing to the
-       second magic byte) */
-    while (in_left) {
-        writen(g.outd, in_next, in_left);
-        out_tot += in_left;
-        in_left = 0;
+       bytes of input, then g.in_left is non-zero and g.in_next is pointing to
+       the second magic byte) */
+    while (g.in_left) {
+        writen(g.outd, g.in_next, g.in_left);
+        g.out_tot += g.in_left;
+        g.in_left = 0;
         load();
     }
 }
@@ -2510,8 +2512,8 @@ local unsigned inb(void *desc, unsigned char **buf)
 {
     (void)desc;
     load();
-    *buf = in_next;
-    return in_left;
+    *buf = g.in_next;
+    return g.in_left;
 }
 
 /* output buffers and window for infchk() and unlzw() */
@@ -2559,7 +2561,7 @@ local void outb_check(void *dummy)
         possess(outb_check_more);
         wait_for(outb_check_more, TO_BE, 1);
         len = out_len;
-        out_check = CHECK(out_check, out_copy, len);
+        g.out_check = CHECK(g.out_check, out_copy, len);
         Trace(("-- decompress checked %lu bytes", len));
         twist(outb_check_more, TO, 0);
     } while (len);
@@ -2595,7 +2597,7 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
 
         /* copy the output and alert the worker bees */
         out_len = len;
-        out_tot += len;
+        g.out_tot += len;
         memcpy(out_copy, buf, len);
         twist(outb_write_more, TO, 1);
         twist(outb_check_more, TO, 1);
@@ -2621,8 +2623,8 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
     if (len) {
         if (g.decode == 1)
             writen(g.outd, buf, len);
-        out_check = CHECK(out_check, buf, len);
-        out_tot += len;
+        g.out_check = CHECK(g.out_check, buf, len);
+        g.out_tot += len;
     }
     return 0;
 }
@@ -2643,9 +2645,9 @@ local void infchk(void)
     cont = 0;
     do {
         /* header already read -- set up for decompression */
-        in_tot = in_left;               /* track compressed data length */
-        out_tot = 0;
-        out_check = CHECK(0L, Z_NULL, 0);
+        g.in_tot = g.in_left;       /* track compressed data length */
+        g.out_tot = 0;
+        g.out_check = CHECK(0L, Z_NULL, 0);
         strm.zalloc = Z_NULL;
         strm.zfree = Z_NULL;
         strm.opaque = Z_NULL;
@@ -2654,18 +2656,18 @@ local void infchk(void)
             bail("not enough memory", "");
 
         /* decompress, compute lengths and check value */
-        strm.avail_in = in_left;
-        strm.next_in = in_next;
+        strm.avail_in = g.in_left;
+        strm.next_in = g.in_next;
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         if (ret != Z_STREAM_END)
             bail("corrupted input -- invalid deflate data: ", g.inf);
-        in_left = strm.avail_in;
-        in_next = strm.next_in;
+        g.in_left = strm.avail_in;
+        g.in_next = strm.next_in;
         inflateBackEnd(&strm);
         outb(NULL, NULL, 0);        /* finish off final write and check */
 
         /* compute compressed data length */
-        clen = in_tot - in_left;
+        clen = g.in_tot - g.in_left;
 
         /* read and check trailer */
         if (g.form > 1) {           /* zip local trailer (if any) */
@@ -2674,12 +2676,12 @@ local void infchk(void)
                 g.zip_crc = GET4();
                 g.zip_clen = GET4();
                 g.zip_ulen = GET4();
-                if (in_eof)
+                if (g.in_eof)
                     bail("corrupted zip entry -- missing trailer: ", g.inf);
 
                 /* if crc doesn't match, try info-zip variant with sig */
-                if (g.zip_crc != out_check) {
-                    if (g.zip_crc != 0x08074b50UL || g.zip_clen != out_check)
+                if (g.zip_crc != g.out_check) {
+                    if (g.zip_crc != 0x08074b50UL || g.zip_clen != g.out_check)
                         bail("corrupted zip entry -- crc32 mismatch: ", g.inf);
                     g.zip_crc = g.zip_clen;
                     g.zip_clen = g.zip_ulen;
@@ -2697,15 +2699,15 @@ local void infchk(void)
                 }
 
                 /* if second length doesn't match, try 64-bit lengths */
-                if (g.zip_ulen != (out_tot & LOW32)) {
+                if (g.zip_ulen != (g.out_tot & LOW32)) {
                     g.zip_ulen = GET4();
                     (void)GET4();
                 }
-                if (in_eof)
+                if (g.in_eof)
                     bail("corrupted zip entry -- missing trailer: ", g.inf);
             }
             if (g.zip_clen != (clen & LOW32) ||
-                g.zip_ulen != (out_tot & LOW32))
+                g.zip_ulen != (g.out_tot & LOW32))
                 bail("corrupted zip entry -- length mismatch: ", g.inf);
             check = g.zip_crc;
         }
@@ -2714,26 +2716,26 @@ local void infchk(void)
             check += (unsigned long)(GET()) << 16;
             check += (unsigned)(GET()) << 8;
             check += GET();
-            if (in_eof)
+            if (g.in_eof)
                 bail("corrupted zlib stream -- missing trailer: ", g.inf);
-            if (check != out_check)
+            if (check != g.out_check)
                 bail("corrupted zlib stream -- adler32 mismatch: ", g.inf);
         }
         else {                      /* gzip trailer */
             check = GET4();
             len = GET4();
-            if (in_eof)
+            if (g.in_eof)
                 bail("corrupted gzip stream -- missing trailer: ", g.inf);
-            if (check != out_check)
+            if (check != g.out_check)
                 bail("corrupted gzip stream -- crc32 mismatch: ", g.inf);
-            if (len != (out_tot & LOW32))
+            if (len != (g.out_tot & LOW32))
                 bail("corrupted gzip stream -- length mismatch: ", g.inf);
         }
 
         /* show file information if requested */
         if (g.list) {
-            in_tot = clen;
-            show_info(8, check, out_tot, cont);
+            g.in_tot = clen;
+            show_info(8, check, g.out_tot, cont);
             cont = 1;
         }
 
@@ -2765,17 +2767,17 @@ unsigned char match[65280 + 2];         /* buffer for reversed match */
     do { \
         left = 0; \
         rem = 0; \
-        if (chunk > in_left) { \
-            chunk -= in_left; \
+        if (chunk > g.in_left) { \
+            chunk -= g.in_left; \
             if (load() == 0) \
                 break; \
-            if (chunk > in_left) { \
-                chunk = in_left = 0; \
+            if (chunk > g.in_left) { \
+                chunk = g.in_left = 0; \
                 break; \
             } \
         } \
-        in_left -= chunk; \
-        in_next += chunk; \
+        g.in_left -= chunk; \
+        g.in_next += chunk; \
         chunk = 0; \
     } while (0)
 
@@ -2801,9 +2803,9 @@ local void unlzw(void)
     unsigned char *p;
 
     /* process remainder of compress header -- a flags byte */
-    out_tot = 0;
+    g.out_tot = 0;
     flags = GET();
-    if (in_eof)
+    if (g.in_eof)
         bail("missing lzw data: ", g.inf);
     if (flags & 0x60)
         bail("unknown lzw flags set: ", g.inf);
@@ -2822,11 +2824,11 @@ local void unlzw(void)
     /* set up: get first 9-bit code, which is the first decompressed byte, but
        don't create a table entry until the next code */
     got = GET();
-    if (in_eof)                             /* no compressed data is ok */
+    if (g.in_eof)                           /* no compressed data is ok */
         return;
     final = prev = (unsigned)got;           /* low 8 bits of code */
     got = GET();
-    if (in_eof || (got & 1) != 0)           /* missing a bit or code >= 256 */
+    if (g.in_eof || (got & 1) != 0)         /* missing a bit or code >= 256 */
         bail("invalid lzw code: ", g.inf);
     rem = (unsigned)got >> 1;               /* remaining 7 bits */
     left = 7;
@@ -2850,9 +2852,9 @@ local void unlzw(void)
             chunk = bits;
         code = rem;                         /* low bits of code */
         got = GET();
-        if (in_eof) {                       /* EOF is end of compressed data */
+        if (g.in_eof) {                     /* EOF is end of compressed data */
             /* write remaining buffered output */
-            out_tot += outcnt;
+            g.out_tot += outcnt;
             if (outcnt && g.decode == 1)
                 writen(g.outd, out_buf, outcnt);
             return;
@@ -2862,7 +2864,7 @@ local void unlzw(void)
         chunk--;
         if (bits > left) {                  /* need more bits */
             got = GET();
-            if (in_eof)                     /* can't end in middle of code */
+            if (g.in_eof)                   /* can't end in middle of code */
                 bail("invalid lzw code: ", g.inf);
             code += (unsigned)got << left;  /* high bits of code */
             left += 8;
@@ -2922,7 +2924,7 @@ local void unlzw(void)
         while (stack > OUTSIZE - outcnt) {
             while (outcnt < OUTSIZE)
                 out_buf[outcnt++] = match[--stack];
-            out_tot += outcnt;
+            g.out_tot += outcnt;
             if (g.decode == 1)
                 writen(g.outd, out_buf, outcnt);
             outcnt = 0;
@@ -3184,8 +3186,8 @@ local void process(char *path)
             else {
                 unlzw();
                 if (g.list) {
-                    in_tot -= 3;
-                    show_info(method, 0, out_tot, 0);
+                    g.in_tot -= 3;
+                    show_info(method, 0, g.out_tot, 0);
                 }
             }
             RELEASE(g.hname);
