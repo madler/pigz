@@ -1,0 +1,23 @@
+Zopfli Compression Algorithm is a compression library programmed in C to perform
+very good, but slow, deflate or zlib compression.
+
+zopfli.c is separate from the library and contains an example program to create
+very well compressed gzip files.
+
+The basic functions to compress data are Deflate in deflate.h, ZlibCompress in
+zlib_container.h and GzipCompress in gzip_container.h. Use the Options
+object to set parameters that affect the speed and compression. Use the
+InitOptions function to place the default values in the Options first.
+
+Deflate creates a valid deflate stream in memory, see:
+http://www.ietf.org/rfc/rfc1951.txt
+ZlibCompress creates a valid zlib stream in memory, see:
+http://www.ietf.org/rfc/rfc1950.txt
+GzipCompress creates a valid gzip stream in memory, see:
+http://www.ietf.org/rfc/rfc1952.txt
+
+This library can only compress, not decompress. Existing zlib or deflate
+libraries can decompress the data.
+
+Zopfli Compression Algorithm was created by Lode Vandevenne and Jyrki
+Alakuijala, based on an algorithm by Jyrki Alakuijala.
