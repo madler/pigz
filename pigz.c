@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Mark Adler
- * Version 2.2.6  xx Jan 2013  Mark Adler
+ * Version 2.3  3 Mar 2013  Mark Adler
  */
 
 /*
@@ -149,10 +149,14 @@
                        Print name of executable in error messages
                        Show help properly when the name is unpigz or gunzip
                        Fix permissions security problem before output is closed
-   2.2.6  xx Jan 2013  -
+   2.3     3 Mar 2013  Don't complain about missing suffix when not writing output file
+                       Put all global variables in one global structure for readability
+                       Do not decompress concatenated zlib streams -- only gzip streams
+                       Add option for compression level 11 to use zopfli
+                       Fix handling of junk after compressed data
  */
 
-#define VERSION "pigz 2.2.6\n"
+#define VERSION "pigz 2.3\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
