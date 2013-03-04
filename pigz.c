@@ -2159,9 +2159,9 @@ local int read_extra(unsigned len, int save)
    range 0..256 (256 implies a zip method greater than 255), or on error return
    negative: -1 is immediate EOF, -2 is not a recognized compressed format, -3
    is premature EOF within the header, -4 is unexpected header flag values, -5
-   is the zip end of central directory; a method of 257 is lzw -- if the return
-   value is not negative, then get_header() sets g.form to indicate gzip (0),
-   zlib (1), or zip (2, or 3 if the entry is followed by a data descriptor) */
+   is the zip central directory; a method of 257 is lzw -- if the return value
+   is not negative, then get_header() sets g.form to indicate gzip (0), zlib
+   (1), or zip (2, or 3 if the entry is followed by a data descriptor) */
 local int get_header(int save)
 {
     unsigned magic;             /* magic header */
@@ -2178,7 +2178,7 @@ local int get_header(int save)
     }
 
     /* see if it's a gzip, zlib, or lzw file */
-    g.form = 0;
+    g.form = -1;
     g.magic1 = GET();
     if (g.in_eof)
         return -1;
@@ -2196,8 +2196,8 @@ local int get_header(int save)
         magic = GET2();             /* the rest of the signature */
         if (g.in_eof)
             return -3;
-        if (magic == 0x0606 || magic == 0x0605)
-            return -5;              /* end record */
+        if (magic == 0x0201 || magic == 0x0806)
+            return -5;              /* central header or archive extra */
         if (magic != 0x0403)
             return -4;              /* not a local header */
         SKIP(2);
@@ -2315,7 +2315,8 @@ local int get_header(int save)
     if (flags & 2)
         SKIP(2);
 
-    /* return compression method */
+    /* return gzip compression method */
+    g.form = 0;
     return method;
 }
 
@@ -2405,7 +2406,7 @@ local void show_info(int method, unsigned long check, off_t len, int cont)
             printf("zip%3d  --------  %s  ", method, mod + 4);
         else if (g.form > 1)
             printf("zip%3d  %08lx  %s  ", method, check, mod + 4);
-        else if (g.form)
+        else if (g.form == 1)
             printf("zlib%2d  %08lx  %s  ", method, check, mod + 4);
         else if (method == 257)
             printf("lzw     --------  %s  ", mod + 4);
@@ -2469,7 +2470,7 @@ local void list_info(void)
     }
 
     /* list zlib file */
-    if (g.form) {
+    if (g.form == 1) {
         at = lseek(g.ind, 0, SEEK_END);
         if (at == -1) {
             check = 0;
@@ -2703,7 +2704,7 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
    read and check the gzip, zlib, or zip trailer */
 local void infchk(void)
 {
-    int ret, cont;
+    int ret, cont, was;
     unsigned long check, len;
     z_stream strm;
     unsigned tmp2;
@@ -2809,13 +2810,16 @@ local void infchk(void)
 
         /* if a gzip entry follows a gzip entry, decompress it (don't replace
            saved header information from first entry) */
-    } while (g.form == 0 && (ret = get_header(0)) == 8 && g.form == 0);
+        was = g.form;
+    } while (was == 0 && (ret = get_header(0)) == 8 && g.form == 0);
 
     /* gzip -cdf copies junk after gzip stream directly to output */
-    if (g.form < 2 && ret == -2 && g.force && g.pipeout && g.decode != 2 &&
+    if (was == 0 && ret == -2 && g.force && g.pipeout && g.decode != 2 &&
         !g.list)
         cat();
-    else if (ret != -1 && g.form < 2)
+    else if (was > 1 && get_header(0) != -5)
+        complain("entries after the first in %s were ignored", g.inf);
+    else if ((was == 0 && ret != -1) || (was == 1 && GET() != EOF))
         complain("%s OK, has trailing junk which was ignored", g.inf);
 }
 
