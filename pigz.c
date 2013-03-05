@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Mark Adler
- * Version 2.3  3 Mar 2013  Mark Adler
+ * Version 2.3.1  xx Mar 2013  Mark Adler
  */
 
 /*
@@ -154,9 +154,10 @@
                        Do not decompress concatenated zlib streams -- only gzip streams
                        Add option for compression level 11 to use zopfli
                        Fix handling of junk after compressed data
+   2.3.1  xx Mar 2013  -
  */
 
-#define VERSION "pigz 2.3\n"
+#define VERSION "pigz 2.3.1\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
