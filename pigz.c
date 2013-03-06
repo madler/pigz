@@ -149,9 +149,9 @@
                        Print name of executable in error messages
                        Show help properly when the name is unpigz or gunzip
                        Fix permissions security problem before output is closed
-   2.3     3 Mar 2013  Don't complain about missing suffix when not writing output file
-                       Put all global variables in one global structure for readability
-                       Do not decompress concatenated zlib streams -- only gzip streams
+   2.3     3 Mar 2013  Don't complain about missing suffix on stdout
+                       Put all global variables in a structure for readability
+                       Do not decompress concatenated zlib streams (just gzip)
                        Add option for compression level 11 to use zopfli
                        Fix handling of junk after compressed data
    2.3.1  xx Mar 2013  -
@@ -1620,7 +1620,7 @@ local void parallel_compress(void)
     writeth = launch(write_thread, NULL);
 
     /* read from input and start compress threads (write thread will pick up
-     the output of the compress threads) */
+       the output of the compress threads) */
     seq = 0;
     next = get_space(&in_pool);
     next->len = readn(g.ind, next->buf, next->size);
