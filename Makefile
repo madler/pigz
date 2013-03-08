@@ -3,7 +3,7 @@ CFLAGS=-O3 -Wall -Wextra
 
 
 pigz: pigz.o yarn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) -o pigz $^ -lpthread -lz -lm
+	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lz -lm
 	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h zopfli/deflate.h zopfli/util.h
@@ -31,19 +31,19 @@ zopfli/katajainen.o: zopfli/katajainen.c zopfli/katajainen.h
 dev: pigz pigzt pigzn
 
 pigzt: pigzt.o yarnt.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) -o pigzt $^ -lpthread -lz -lm
+	$(CC) $(LDFLAGS) -o pigzt $^ -lpthread -lz -lm
 
 pigzt.o: pigz.c yarn.h
-	$(CC) -Wall -O3 -DDEBUG -g -c -o pigzt.o pigz.c
+	$(CC) $(CFLAGS) -DDEBUG -g -c -o pigzt.o pigz.c
 
 yarnt.o: yarn.c yarn.h
-	$(CC) -Wall -O3 -DDEBUG -g -c -o yarnt.o yarn.c
+	$(CC) $(CFLAGS) -DDEBUG -g -c -o yarnt.o yarn.c
 
 pigzn: pigzn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) -o pigzn $^ -lz -lm
+	$(CC) $(LDFLAGS) -o pigzn $^ -lz -lm
 
 pigzn.o: pigz.c
-	$(CC) -Wall -O3 -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
+	$(CC) $(CFLAGS) -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
 
 test: pigz
 	./pigz -kf pigz.c ; ./pigz -t pigz.c.gz
