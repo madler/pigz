@@ -320,6 +320,21 @@
 #  include <inttypes.h> /* intmax_t */
 #endif
 
+#ifdef DEBUG
+#  if defined(__APPLE__)
+#    include <malloc/malloc.h>
+#    define MALLOC_SIZE(p) malloc_size(p)
+#  elif defined (__linux)
+#    include <malloc.h>
+#    define MALLOC_SIZE(p) malloc_usable_size(p)
+#  elif defined (_WIN32) || defined(_WIN64)
+#    include <malloc.h>
+#    define MALLOC_SIZE(p) _msize(p)
+#  else
+#    define MALLOC_SIZE(p) (0)
+#  endif
+#endif
+
 #ifdef __hpux
 #  include <sys/param.h>
 #  include <sys/pstat.h>
@@ -357,7 +372,7 @@
 #define RELEASE(ptr) \
     do { \
         if ((ptr) != NULL) { \
-            free(ptr); \
+            FREE(ptr); \
             ptr = NULL; \
         } \
     } while (0)
@@ -511,6 +526,105 @@ local int bail(char *why, char *what)
 
 #ifdef DEBUG
 
+/* memory tracking */
+
+local struct mem_track_s {
+    size_t num;         /* current number of allocations */
+    size_t size;        /* total size of current allocations */
+    size_t max;         /* maximum size of allocations */
+#ifndef NOTHREAD
+    lock *lock;         /* lock for access across threads */
+#endif
+} mem_track;
+
+#ifndef NOTHREAD
+#  define mem_track_grab(m) possess((m)->lock)
+#  define mem_track_drop(m) release((m)->lock)
+#else
+#  define mem_track_grab(m)
+#  define mem_track_drop(m)
+#endif
+
+local void *malloc_track(struct mem_track_s *mem, size_t size)
+{
+    void *ptr;
+
+    ptr = malloc(size);
+    if (ptr != NULL) {
+        size = MALLOC_SIZE(ptr);
+        mem_track_grab(mem);
+        mem->num++;
+        mem->size += size;
+        if (mem->size > mem->max)
+            mem->max = mem->size;
+        mem_track_drop(mem);
+    }
+    return ptr;
+}
+
+local void *realloc_track(struct mem_track_s *mem, void *ptr, size_t size)
+{
+    size_t was;
+
+    if (ptr == NULL)
+        return malloc_track(mem, size);
+    was = MALLOC_SIZE(ptr);
+    ptr = realloc(ptr, size);
+    if (ptr != NULL) {
+        size = MALLOC_SIZE(ptr);
+        mem_track_grab(mem);
+        mem->size -= was;
+        mem->size += size;
+        if (mem->size > mem->max)
+            mem->max = mem->size;
+        mem_track_drop(mem);
+    }
+    return ptr;
+}
+
+local void free_track(struct mem_track_s *mem, void *ptr)
+{
+    size_t size;
+
+    if (ptr != NULL) {
+        size = MALLOC_SIZE(ptr);
+        mem_track_grab(mem);
+        mem->num--;
+        mem->size -= size;
+        mem_track_drop(mem);
+        free(ptr);
+    }
+}
+
+#ifndef NOTHREAD
+local void *yarn_malloc(size_t size)
+{
+    return malloc_track(&mem_track, size);
+}
+
+local void yarn_free(void *ptr)
+{
+    return free_track(&mem_track, ptr);
+}
+#endif
+
+local voidpf zlib_alloc(voidpf opaque, uInt items, uInt size)
+{
+    return malloc_track(opaque, items * (size_t)size);
+}
+
+local void zlib_free(voidpf opaque, voidpf address)
+{
+    free_track(opaque, address);
+}
+
+#define MALLOC(s) malloc_track(&mem_track, s)
+#define REALLOC(p, s) realloc_track(&mem_track, p, s)
+#define FREE(p) free_track(&mem_track, p)
+#define OPAQUE (&mem_track)
+#define ZALLOC zlib_alloc
+#define ZFREE zlib_free
+
 /* starting time of day for tracing */
 local struct timeval start;
 
@@ -531,7 +645,12 @@ local struct log {
 local void log_init(void)
 {
     if (log_tail == NULL) {
+        mem_track.num = 0;
+        mem_track.size = 0;
+        mem_track.max = 0;
 #ifndef NOTHREAD
+        mem_track.lock = new_lock(0);
+        yarn_mem(yarn_malloc, yarn_free);
         log_lock = new_lock(0);
 #endif
         log_head = NULL;
@@ -548,16 +667,16 @@ local void log_add(char *fmt, ...)
     char msg[MAXMSG];
 
     gettimeofday(&now, NULL);
-    me = malloc(sizeof(struct log));
+    me = MALLOC(sizeof(struct log));
     if (me == NULL)
         bail("not enough memory", "");
     me->when = now;
     va_start(ap, fmt);
     vsnprintf(msg, MAXMSG, fmt, ap);
     va_end(ap);
-    me->msg = malloc(strlen(msg) + 1);
+    me->msg = MALLOC(strlen(msg) + 1);
     if (me->msg == NULL) {
-        free(me);
+        FREE(me);
         bail("not enough memory", "");
     }
     strcpy(me->msg, msg);
@@ -606,8 +725,8 @@ local int log_show(void)
     fprintf(stderr, "trace %ld.%06ld %s\n",
             (long)diff.tv_sec, (long)diff.tv_usec, me->msg);
     fflush(stderr);
-    free(me->msg);
-    free(me);
+    FREE(me->msg);
+    FREE(me);
     return 1;
 }
 
@@ -622,13 +741,15 @@ local void log_free(void)
 #endif
         while ((me = log_head) != NULL) {
             log_head = me->next;
-            free(me->msg);
-            free(me);
+            FREE(me->msg);
+            FREE(me);
         }
 #ifndef NOTHREAD
         twist(log_lock, TO, 0);
         free_lock(log_lock);
         log_lock = NULL;
+        yarn_mem(malloc, free);
+        free_lock(mem_track.lock);
 #endif
         log_tail = NULL;
     }
@@ -642,6 +763,11 @@ local void log_dump(void)
     while (log_show())
         ;
     log_free();
+    if (mem_track.num || mem_track.size)
+        complain("memory leak: %lu allocs of %lu bytes total",
+                 mem_track.num, mem_track.size);
+    if (mem_track.max)
+        fprintf(stderr, "%lu bytes of memory used\n", mem_track.max);
 }
 
 /* debugging macro */
@@ -653,6 +779,13 @@ local void log_dump(void)
     } while (0)
 
 #else /* !DEBUG */
+
+#define MALLOC malloc
+#define REALLOC realloc
+#define FREE free
+#define OPAQUE Z_NULL
+#define ZALLOC Z_NULL
+#define ZFREE Z_NULL
 
 #define log_dump()
 #define Trace(x)
@@ -1044,11 +1177,11 @@ local struct space *get_space(struct pool *pool)
         pool->limit--;
     pool->made++;
     release(pool->have);
-    space = malloc(sizeof(struct space));
+    space = MALLOC(sizeof(struct space));
     if (space == NULL)
         bail("not enough memory", "");
     space->use = new_lock(1);           /* initially one user */
-    space->buf = malloc(pool->size);
+    space->buf = MALLOC(pool->size);
     if (space->buf == NULL)
         bail("not enough memory", "");
     space->size = pool->size;
@@ -1090,7 +1223,7 @@ local void grow_space(struct space *space)
         bail("not enough memory", "");
 
     /* reallocate the buffer */
-    space->buf = realloc(space->buf, more);
+    space->buf = REALLOC(space->buf, more);
     if (space->buf == NULL)
         bail("not enough memory", "");
     space->size = more;
@@ -1134,9 +1267,9 @@ local int free_pool(struct pool *pool)
     count = 0;
     while ((space = pool->head) != NULL) {
         pool->head = space->next;
-        free(space->buf);
+        FREE(space->buf);
         free_lock(space->use);
-        free(space);
+        FREE(space);
         count++;
     }
     assert(count == pool->made);
@@ -1288,9 +1421,9 @@ local void compress_thread(void *dummy)
     (void)dummy;
 
     /* initialize the deflate stream for this thread */
-    strm.zfree = Z_NULL;
-    strm.zalloc = Z_NULL;
-    strm.opaque = Z_NULL;
+    strm.zfree = ZFREE;
+    strm.zalloc = ZALLOC;
+    strm.opaque = OPAQUE;
     if (deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
         bail("not enough memory", "");
 
@@ -1549,7 +1682,7 @@ local void write_thread(void *dummy)
 
         /* free the job */
         free_lock(job->calc);
-        free(job);
+        FREE(job);
 
         /* get the next buffer in sequence */
         seq++;
@@ -1631,7 +1764,7 @@ local void parallel_compress(void)
     left = 0;
     do {
         /* create a new job */
-        job = malloc(sizeof(struct job));
+        job = MALLOC(sizeof(struct job));
         if (job == NULL)
             bail("not enough memory", "");
         job->calc = new_lock(0);
@@ -1817,10 +1950,10 @@ local void single_compress(int reset)
     if (reset) {
         if (strm != NULL) {
             (void)deflateEnd(strm);
-            free(strm);
-            free(out);
-            free(next);
-            free(in);
+            FREE(strm);
+            FREE(out);
+            FREE(next);
+            FREE(in);
             strm = NULL;
         }
         return;
@@ -1829,14 +1962,14 @@ local void single_compress(int reset)
     /* initialize the deflate structure if this is the first time */
     if (strm == NULL) {
         out_size = g.block > MAXP2 ? MAXP2 : (unsigned)g.block;
-        if ((in = malloc(g.block)) == NULL ||
-            (next = malloc(g.block)) == NULL ||
-            (out = malloc(out_size)) == NULL ||
-            (strm = malloc(sizeof(z_stream))) == NULL)
+        if ((in = MALLOC(g.block)) == NULL ||
+            (next = MALLOC(g.block)) == NULL ||
+            (out = MALLOC(out_size)) == NULL ||
+            (strm = MALLOC(sizeof(z_stream))) == NULL)
             bail("not enough memory", "");
-        strm->zfree = Z_NULL;
-        strm->zalloc = Z_NULL;
-        strm->opaque = Z_NULL;
+        strm->zfree = ZFREE;
+        strm->zalloc = ZALLOC;
+        strm->opaque = OPAQUE;
         if (deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) !=
                          Z_OK)
             bail("not enough memory", "");
@@ -2226,7 +2359,7 @@ local int get_header(int save)
         fname = GET2();
         extra = GET2();
         if (save) {
-            char *next = g.hname = malloc(fname + 1);
+            char *next = g.hname = MALLOC(fname + 1);
             if (g.hname == NULL)
                 bail("not enough memory", "");
             while (fname > g.in_left) {
@@ -2283,7 +2416,7 @@ local int get_header(int save)
     if ((flags & 8) && save) {
         unsigned char *end;
         size_t copy, have, size = 128;
-        g.hname = malloc(size);
+        g.hname = MALLOC(size);
         if (g.hname == NULL)
             bail("not enough memory", "");
         have = 0;
@@ -2295,7 +2428,7 @@ local int get_header(int save)
             if (have + copy > size) {
                 while (have + copy > (size <<= 1))
                     ;
-                g.hname = realloc(g.hname, size);
+                g.hname = REALLOC(g.hname, size);
                 if (g.hname == NULL)
                     bail("not enough memory", "");
             }
@@ -2722,9 +2855,9 @@ local void infchk(void)
         g.in_tot = g.in_left;       /* track compressed data length */
         g.out_tot = 0;
         g.out_check = CHECK(0L, Z_NULL, 0);
-        strm.zalloc = Z_NULL;
-        strm.zfree = Z_NULL;
-        strm.opaque = Z_NULL;
+        strm.zalloc = ZALLOC;
+        strm.zfree = ZFREE;
+        strm.opaque = OPAQUE;
         ret = inflateBackInit(&strm, 15, out_buf);
         if (ret != Z_OK)
             bail("not enough memory", "");
@@ -3155,7 +3288,7 @@ local void process(char *path)
             if (here == NULL)
                 return;
             hold = 512;
-            roll = malloc(hold);
+            roll = MALLOC(hold);
             if (roll == NULL)
                 bail("not enough memory", "");
             *roll = 0;
@@ -3170,9 +3303,9 @@ local void process(char *path)
                     do {                    /* make roll bigger */
                         hold <<= 1;
                     } while (item + len + 1 > roll + hold);
-                    bigger = realloc(roll, hold);
+                    bigger = REALLOC(roll, hold);
                     if (bigger == NULL) {
-                        free(roll);
+                        FREE(roll);
                         bail("not enough memory", "");
                     }
                     item = bigger + (item - roll);
@@ -3204,7 +3337,7 @@ local void process(char *path)
             *cut = 0;
 
             /* release list of entries */
-            free(roll);
+            FREE(roll);
             return;
         }
 
@@ -3286,7 +3419,7 @@ local void process(char *path)
     /* create output file out, descriptor outd */
     if (path == NULL || g.pipeout) {
         /* write to stdout */
-        g.outf = malloc(strlen("<stdout>") + 1);
+        g.outf = MALLOC(strlen("<stdout>") + 1);
         if (g.outf == NULL)
             bail("not enough memory", "");
         strcpy(g.outf, "<stdout>");
@@ -3309,7 +3442,7 @@ local void process(char *path)
         repl = g.decode && strcmp(to + len, ".tgz") ? "" : ".tar";
 
         /* create output file and open to write */
-        g.outf = malloc(len + (g.decode ? strlen(repl) : strlen(g.sufx)) + 1);
+        g.outf = MALLOC(len + (g.decode ? strlen(repl) : strlen(g.sufx)) + 1);
         if (g.outf == NULL)
             bail("not enough memory", "");
         memcpy(g.outf, to, len);
