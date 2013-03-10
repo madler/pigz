@@ -1987,7 +1987,7 @@ local void single_compress(int reset)
     /* do raw deflate and calculate check value */
     got = 0;
     more = readn(g.ind, next, g.block);
-    ulen = (unsigned)more;
+    ulen = (unsigned long)more;
     start = 0;
     clen = 0;
     have = 0;
