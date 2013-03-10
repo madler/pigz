@@ -1464,7 +1464,8 @@ local void compress_thread(void *dummy)
         }
 
         /* set dictionary if provided, release that input or dictionary buffer
-           (not NULL if dict is true and if this is not the first work unit) */
+           (not NULL if g.setdict is true and if this is not the first work
+           unit) */
         if (job->out != NULL) {
             len = job->out->len;
             left = len < DICT ? len : DICT;
@@ -1929,14 +1930,13 @@ local void parallel_compress(void)
    output, and deflate */
 local void single_compress(int reset)
 {
-    size_t got;                     /* amount read */
-    size_t more;                    /* amount of next read (0 if eof) */
-    size_t start;                   /* start of next read */
+    size_t got;                     /* amount of data in in[] */
+    size_t more;                    /* amount of data in next[] (0 if eof) */
+    size_t start;                   /* start of data in next[] */
     size_t have;                    /* bytes in current block for -i */
+    size_t hist;                    /* offset of permitted history */
+    int fresh;                      /* if true, reset compression history */
     unsigned hash;                  /* hash for rsyncable */
-#if ZLIB_VERNUM >= 0x1260
-    int bits;                       /* deflate pending bits */
-#endif
     unsigned char *scan;            /* pointer for hash computation */
     size_t left;                    /* bytes left to compress after hash hit */
     unsigned long head;             /* header length */
@@ -1964,8 +1964,8 @@ local void single_compress(int reset)
     /* initialize the deflate structure if this is the first time */
     if (strm == NULL) {
         out_size = g.block > MAXP2 ? MAXP2 : (unsigned)g.block;
-        if ((in = MALLOC(g.block)) == NULL ||
-            (next = MALLOC(g.block)) == NULL ||
+        if ((in = MALLOC(g.block + DICT)) == NULL ||
+            (next = MALLOC(g.block + DICT)) == NULL ||
             (out = MALLOC(out_size)) == NULL ||
             (strm = MALLOC(sizeof(z_stream))) == NULL)
             bail("not enough memory", "");
@@ -1981,16 +1981,27 @@ local void single_compress(int reset)
     head = put_header();
 
     /* set compression level in case it changed */
-    if (g.level > 9)
-        bail("compression level 11 not yet implemented for one thread", "");
-    (void)deflateReset(strm);
-    (void)deflateParams(strm, g.level, Z_DEFAULT_STRATEGY);
+    if (g.level <= 9) {
+        (void)deflateReset(strm);
+        (void)deflateParams(strm, g.level, Z_DEFAULT_STRATEGY);
+    }
+    else {
+        /* default zopfli options as set by ZopfliInitOptions():
+            verbose = 0
+            numiterations = 15
+            blocksplitting = 1
+            blocksplittinglast = 0
+            blocksplittingmax = 15
+         */
+        ZopfliInitOptions(&opts);
+    }
 
     /* do raw deflate and calculate check value */
     got = 0;
     more = readn(g.ind, next, g.block);
     ulen = (unsigned long)more;
     start = 0;
+    hist = 0;
     clen = 0;
     have = 0;
     check = CHECK(0L, Z_NULL, 0);
@@ -2001,9 +2012,18 @@ local void single_compress(int reset)
             scan = in;  in = next;  next = scan;
             strm->next_in = in + start;
             got = more;
-            more = readn(g.ind, next, g.block);
+            if (g.level > 9) {
+                left = start + more - hist;
+                if (left > DICT)
+                    left = DICT;
+                memcpy(next, in + ((start + more) - left), left);
+                start = left;
+                hist = 0;
+            }
+            else
+                start = 0;
+            more = readn(g.ind, next + start, g.block);
             ulen += (unsigned long)more;
-            start = 0;
         }
 
         /* if rsyncable, compute hash until a hit or the end of the block */
@@ -2020,9 +2040,15 @@ local void single_compress(int reset)
 
                     /* fill in[] with what's left there and as much as possible
                        from next[] -- set up to continue hash hit search */
-                    memmove(in, strm->next_in, got);
-                    strm->next_in = in;
-                    scan = in + got;
+                    if (g.level > 9) {
+                        left = (strm->next_in - in) - hist;
+                        if (left > DICT)
+                            left = DICT;
+                    }
+                    memmove(in, strm->next_in - left, left + got);
+                    hist = 0;
+                    strm->next_in = in + left;
+                    scan = in + left + got;
                     left = more > g.block - got ? g.block - got : more;
                     memcpy(scan, next + start, left);
                     got += left;
@@ -2043,46 +2069,103 @@ local void single_compress(int reset)
         }
 
         /* clear history for --independent option */
+        fresh = 0;
         if (!g.setdict) {
             have += got;
             if (have > g.block) {
-                (void)deflateReset(strm);
+                fresh = 1;
                 have = got;
             }
         }
 
-        /* compress MAXP2-size chunks in case unsigned type is small */
-        while (got > MAXP2) {
-            strm->avail_in = MAXP2;
-            check = CHECK(check, strm->next_in, strm->avail_in);
-            DEFLATE_WRITE(Z_NO_FLUSH);
-            got -= MAXP2;
-        }
+        if (g.level <= 9) {
+            /* clear history if requested */
+            if (fresh)
+                (void)deflateReset(strm);
 
-        /* compress the remainder, emit a block -- finish if end of input */
-        strm->avail_in = (unsigned)got;
-        got = left;
-        check = CHECK(check, strm->next_in, strm->avail_in);
-        if (more || got) {
-#if ZLIB_VERNUM >= 0x1260
-            DEFLATE_WRITE(Z_BLOCK);
-            (void)deflatePending(strm, Z_NULL, &bits);
-            if (bits & 1)
-                DEFLATE_WRITE(Z_SYNC_FLUSH);
-            else if (bits & 7) {
-                do {
-                    bits = deflatePrime(strm, 10, 2);
-                    assert(bits == Z_OK);
-                    (void)deflatePending(strm, Z_NULL, &bits);
-                } while (bits & 7);
+            /* compress MAXP2-size chunks in case unsigned type is small */
+            while (got > MAXP2) {
+                strm->avail_in = MAXP2;
+                check = CHECK(check, strm->next_in, strm->avail_in);
                 DEFLATE_WRITE(Z_NO_FLUSH);
+                got -= MAXP2;
             }
+
+            /* compress the remainder, emit a block, finish if end of input */
+            strm->avail_in = (unsigned)got;
+            got = left;
+            check = CHECK(check, strm->next_in, strm->avail_in);
+            if (more || got) {
+#if ZLIB_VERNUM >= 0x1260
+                int bits;
+
+                DEFLATE_WRITE(Z_BLOCK);
+                (void)deflatePending(strm, Z_NULL, &bits);
+                if (bits & 1)
+                    DEFLATE_WRITE(Z_SYNC_FLUSH);
+                else if (bits & 7) {
+                    do {
+                        bits = deflatePrime(strm, 10, 2);
+                        assert(bits == Z_OK);
+                        (void)deflatePending(strm, Z_NULL, &bits);
+                    } while (bits & 7);
+                    DEFLATE_WRITE(Z_NO_FLUSH);
+                }
 #else
-            DEFLATE_WRITE(Z_SYNC_FLUSH);
+                DEFLATE_WRITE(Z_SYNC_FLUSH);
 #endif
+            }
+            else
+                DEFLATE_WRITE(Z_FINISH);
         }
-        else
-            DEFLATE_WRITE(Z_FINISH);
+        else {
+            /* compress got bytes using zopfli, bring to byte boundary */
+            unsigned char bits, *out;
+            size_t outsize, off;
+
+            /* discard history if requested */
+            off = strm->next_in - in;
+            if (fresh)
+                hist = off;
+
+            out = NULL;
+            outsize = 0;
+            bits = 0;
+            ZopfliDeflatePart(&opts, 2, !(more || left),
+                              in + hist, off - hist, (off - hist) + got,
+                              &bits, &out, &outsize);
+            bits &= 7;
+            if ((more || left) && bits) {
+                if (bits & 1) {
+                    writen(g.outd, out, outsize);
+                    if (bits == 7)
+                        writen(g.outd, (unsigned char *)"\0", 1);
+                    writen(g.outd, (unsigned char *)"\0\0\xff\xff", 4);
+                }
+                else {
+                    assert(outsize > 0);
+                    writen(g.outd, out, outsize - 1);
+                    do {
+                        out[outsize - 1] += 2 << bits;
+                        writen(g.outd, out + outsize - 1, 1);
+                        out[outsize - 1] = 0;
+                        bits += 2;
+                    } while (bits < 8);
+                    writen(g.outd, out + outsize - 1, 1);
+                }
+            }
+            else
+                writen(g.outd, out, outsize);
+            free(out);
+            while (got > MAXP2) {
+                check = CHECK(check, strm->next_in, MAXP2);
+                strm->next_in += MAXP2;
+                got -= MAXP2;
+            }
+            check = CHECK(check, strm->next_in, (unsigned)got);
+            strm->next_in += got;
+            got = left;
+        }
 
         /* do until no more input */
     } while (more || got);
