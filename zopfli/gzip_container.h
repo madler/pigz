@@ -24,7 +24,7 @@ Author: jyrki.alakuijala@gmail.com (Jyrki Alakuijala)
 Functions to compress according to the Gzip specification.
 */
 
-#include "util.h"
+#include "zopfli.h"
 
 /*
 Compresses according to the gzip specification and append the compressed
@@ -35,8 +35,8 @@ out: pointer to the dynamic output array to which the result is appended. Must
   be freed after use.
 outsize: pointer to the dynamic output array size.
 */
-void GzipCompress(const Options* options,
-                  const unsigned char* in, size_t insize,
-                  unsigned char** out, size_t* outsize);
+void ZopfliGzipCompress(const ZopfliOptions* options,
+                        const unsigned char* in, size_t insize,
+                        unsigned char** out, size_t* outsize);
 
 #endif  /* ZOPFLI_GZIP_H_ */
