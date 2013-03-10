@@ -3,6 +3,11 @@ Copyright 2013 Google Inc. All Rights Reserved.
 Author: lode@google.com (Lode Vandevenne)
 */
 
+/*
+Modified by madler@alumni.caltech.edu (Mark Adler)
+Moved ZopfliInitOptions() to deflate.c.
+*/
+
 #include "zopfli.h"
 
 #include "deflate.h"
@@ -10,14 +15,6 @@ Author: lode@google.com (Lode Vandevenne)
 #include "zlib_container.h"
 
 #include <assert.h>
-
-void ZopfliInitOptions(ZopfliOptions* options) {
-  options->verbose = 0;
-  options->numiterations = 15;
-  options->blocksplitting = 1;
-  options->blocksplittinglast = 0;
-  options->blocksplittingmax = 15;
-}
 
 void ZopfliCompress(const ZopfliOptions* options, ZopfliFormat output_type,
                     const unsigned char* in, size_t insize,

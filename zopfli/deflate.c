@@ -19,7 +19,7 @@ Author: jyrki.alakuijala@gmail.com (Jyrki Alakuijala)
 
 /*
 Modified by madler@alumni.caltech.edu (Mark Adler)
-Exposed DeflatePart() as an external function.
+Moved ZopfliInitOptions() from zopfli_lib.c.
 */
 
 #include "deflate.h"
@@ -32,6 +32,14 @@ Exposed DeflatePart() as an external function.
 #include "lz77.h"
 #include "squeeze.h"
 #include "tree.h"
+
+void ZopfliInitOptions(ZopfliOptions* options) {
+    options->verbose = 0;
+    options->numiterations = 15;
+    options->blocksplitting = 1;
+    options->blocksplittinglast = 0;
+    options->blocksplittingmax = 15;
+}
 
 static void AddBit(int bit,
                    unsigned char* bp, unsigned char** out, size_t* outsize) {

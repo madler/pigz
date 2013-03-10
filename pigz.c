@@ -355,7 +355,8 @@
                         /* lock, new_lock(), possess(), twist(), wait_for(),
                            release(), peek_lock(), free_lock(), yarn_name */
 #endif
-#include "zopfli/deflate.h"     /* DeflatePart(), Options */
+#include "zopfli/deflate.h"     /* ZopfliDeflatePart(), ZopfliInitOptions(),
+                                   ZopfliOptions */
 
 /* for local functions and globals */
 #define local static
@@ -1415,7 +1416,7 @@ local void compress_thread(void *dummy)
     int bits;                       /* deflate pending bits */
 #endif
     struct space *temp;             /* temporary space for zopfli input */
-    Options opts;                   /* zopfli options */
+    ZopfliOptions opts;             /* zopfli options */
     z_stream strm;                  /* deflate stream */
 
     (void)dummy;
@@ -1450,14 +1451,14 @@ local void compress_thread(void *dummy)
             (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
         }
         else {
-            /* default zopfli options as set by InitOptions():
-                 verbose = 0
-                 numiterations = 15
-                 blocksplitting = 1
-                 blocksplittinglast = 0
-                 blocksplittingmax = 15
+            /* default zopfli options as set by ZopfliInitOptions():
+                verbose = 0
+                numiterations = 15
+                blocksplitting = 1
+                blocksplittinglast = 0
+                blocksplittingmax = 15
              */
-            InitOptions(&opts);
+            ZopfliInitOptions(&opts);
             temp = get_space(&out_pool);
             temp->len = 0;
         }
@@ -1551,9 +1552,9 @@ local void compress_thread(void *dummy)
                 out = NULL;
                 outsize = 0;
                 bits = 0;
-                DeflatePart(&opts, 2, !(left || job->more),
-                            temp->buf, temp->len, temp->len + len,
-                            &bits, &out, &outsize);
+                ZopfliDeflatePart(&opts, 2, !(left || job->more),
+                                  temp->buf, temp->len, temp->len + len,
+                                  &bits, &out, &outsize);
                 assert(job->out->len + outsize + 5 <= job->out->size);
                 memcpy(job->out->buf + job->out->len, out, outsize);
                 free(out);
@@ -1942,6 +1943,7 @@ local void single_compress(int reset)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
+    ZopfliOptions opts;             /* zopfli options */
     static unsigned out_size;       /* size of output buffer */
     static unsigned char *in, *next, *out;  /* reused i/o buffers */
     static z_stream *strm = NULL;   /* reused deflate structure */
