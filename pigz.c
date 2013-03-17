@@ -315,7 +315,7 @@
                         /* O_WRONLY */
 #include <dirent.h>     /* opendir(), readdir(), closedir(), DIR, */
                         /* struct dirent */
-#include <limits.h>     /* PATH_MAX, UINT_MAX */
+#include <limits.h>     /* PATH_MAX, UINT_MAX, INT_MAX */
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #  include <inttypes.h> /* intmax_t */
 #endif
@@ -465,6 +465,7 @@ local struct {
     int first;              /* true if we need to print listing header */
     int decode;             /* 0 to compress, 1 to decompress, 2 to test */
     int level;              /* compression level */
+    ZopfliOptions zopts;    /* zopfli compression options */
     int rsync;              /* true for rsync blocking */
     int procs;              /* maximum number of compression threads (>= 1) */
     int setdict;            /* true to initialize dictionary in each thread */
@@ -1416,7 +1417,6 @@ local void compress_thread(void *dummy)
     int bits;                       /* deflate pending bits */
 #endif
     struct space *temp;             /* temporary space for zopfli input */
-    ZopfliOptions opts;             /* zopfli options */
     z_stream strm;                  /* deflate stream */
 
     (void)dummy;
@@ -1451,14 +1451,6 @@ local void compress_thread(void *dummy)
             (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
         }
         else {
-            /* default zopfli options as set by ZopfliInitOptions():
-                verbose = 0
-                numiterations = 15
-                blocksplitting = 1
-                blocksplittinglast = 0
-                blocksplittingmax = 15
-             */
-            ZopfliInitOptions(&opts);
             temp = get_space(&out_pool);
             temp->len = 0;
         }
@@ -1553,7 +1545,7 @@ local void compress_thread(void *dummy)
                 out = NULL;
                 outsize = 0;
                 bits = 0;
-                ZopfliDeflatePart(&opts, 2, !(left || job->more),
+                ZopfliDeflatePart(&g.zopts, 2, !(left || job->more),
                                   temp->buf, temp->len, temp->len + len,
                                   &bits, &out, &outsize);
                 assert(job->out->len + outsize + 5 <= job->out->size);
@@ -1943,7 +1935,6 @@ local void single_compress(int reset)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
-    ZopfliOptions opts;             /* zopfli options */
     static unsigned out_size;       /* size of output buffer */
     static unsigned char *in, *next, *out;  /* reused i/o buffers */
     static z_stream *strm = NULL;   /* reused deflate structure */
@@ -1984,16 +1975,6 @@ local void single_compress(int reset)
     if (g.level <= 9) {
         (void)deflateReset(strm);
         (void)deflateParams(strm, g.level, Z_DEFAULT_STRATEGY);
-    }
-    else {
-        /* default zopfli options as set by ZopfliInitOptions():
-            verbose = 0
-            numiterations = 15
-            blocksplitting = 1
-            blocksplittinglast = 0
-            blocksplittingmax = 15
-         */
-        ZopfliInitOptions(&opts);
     }
 
     /* do raw deflate and calculate check value */
@@ -2131,7 +2112,7 @@ local void single_compress(int reset)
             out = NULL;
             outsize = 0;
             bits = 0;
-            ZopfliDeflatePart(&opts, 2, !(more || left),
+            ZopfliDeflatePart(&g.zopts, 2, !(more || left),
                               in + hist, off - hist, (off - hist) + got,
                               &bits, &out, &outsize);
             bits &= 7;
@@ -3626,14 +3607,18 @@ local char *helptext[] = {
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
 "  -d, --decompress     Decompress the compressed input",
 "  -f, --force          Force overwrite, compress .gz, links, and to terminal",
+"  -F  --first          Do iterations first, before block split for -11",
 "  -h, --help           Display a help screen and quit",
 "  -i, --independent    Compress blocks independently for damage recovery",
+"  -I, --iterations n   Number of iterations for -11 optimization",
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -l, --list           List the contents of the compressed input",
 "  -L, --license        Display the pigz license and quit",
+"  -M, --maxsplits n    Maximum number of split blocks for -11",
 "  -n, --no-name        Do not store or restore file name in/from header",
 "  -N, --name           Store/restore file name and mod time in/from header",
+"  -O  --oneblock       Do not split into smaller blocks for -11",
 #ifndef NOTHREAD
 "  -p, --processes n    Allow up to n compression threads (default is the",
 "                       number of online processors, or 8 if unknown)",
@@ -3695,6 +3680,14 @@ local int nprocs(int n)
 local void defaults(void)
 {
     g.level = Z_DEFAULT_COMPRESSION;
+    /* default zopfli options as set by ZopfliInitOptions():
+        verbose = 0
+        numiterations = 15
+        blocksplitting = 1
+        blocksplittinglast = 0
+        blocksplittingmax = 15
+     */
+    ZopfliInitOptions(&g.zopts);
 #ifdef NOTHREAD
     g.procs = 1;
 #else
@@ -3718,9 +3711,10 @@ local void defaults(void)
 /* long options conversion to short options */
 local char *longopts[][2] = {
     {"LZW", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
-    {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"force", "f"},
-    {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
-    {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "T"},
+    {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"first", "F"},
+    {"force", "f"}, {"help", "h"}, {"independent", "i"}, {"iterations", "I"},
+    {"keep", "k"}, {"license", "L"}, {"list", "l"}, {"maxsplits", "M"},
+    {"name", "N"}, {"no-name", "n"}, {"no-time", "T"}, {"oneblock", "O"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
     {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
     {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
@@ -3747,10 +3741,10 @@ local size_t num(char *arg)
     if (*str == 0)
         bail("internal error: empty parameter", "");
     do {
-        if (*str < '0' || *str > '9')
+        if (*str < '0' || *str > '9' ||
+            (val && ((~(size_t)0) - (*str - '0')) / val < 10))
             bail("invalid numeric parameter: ", arg);
         val = val * 10 + (*str - '0');
-        /* %% need to detect overflow here */
     } while (*++str);
     return val;
 }
@@ -3763,7 +3757,7 @@ local int option(char *arg)
 
     /* if no argument or dash option, check status of get */
     if (get && (arg == NULL || *arg == '-')) {
-        bad[1] = "bpS"[get - 1];
+        bad[1] = "bpSIM"[get - 1];
         bail("missing parameter after ", bad);
     }
     if (arg == NULL)
@@ -3799,18 +3793,23 @@ local int option(char *arg)
                 break;      /* allow -pnnn and -bnnn, fall to parameter code */
             }
 
-            /* process next single character option */
+            /* process next single character option or compression level */
             bad[1] = *arg;
             switch (*arg) {
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
                 g.level = *arg - '0';
-                while (arg[1] >= '0' && arg[1] <= '9')
+                while (arg[1] >= '0' && arg[1] <= '9') {
+                    if (g.level && (INT_MAX - (arg[1] - '0')) / g.level < 10)
+                        bail("only levels 0..9 and 11 are allowed", "");
                     g.level = g.level * 10 + *++arg - '0';
+                }
                 if (g.level == 10 || g.level > 11)
                     bail("only levels 0..9 and 11 are allowed", "");
                 new_opts();
                 break;
+            case 'F':  g.zopts.blocksplittinglast = 1;  break;
+            case 'I':  get = 4;  break;
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
@@ -3821,10 +3820,12 @@ local int option(char *arg)
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
                 exit(0);
+            case 'M':  get = 5;  break;
             case 'N':  g.headis = 3;  break;
-            case 'T':  g.headis &= ~2;  break;
+            case 'O':  g.zopts.blocksplitting = 0;  break;
             case 'R':  g.rsync = 1;  break;
             case 'S':  get = 3;  break;
+            case 'T':  g.headis &= ~2;  break;
             case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
                 bail("invalid option: LZW output not supported: ", bad);
@@ -3853,7 +3854,7 @@ local int option(char *arg)
             return 0;
     }
 
-    /* process option parameter for -b, -p, or -S */
+    /* process option parameter for -b, -p, -S, -I, or -M */
     if (get) {
         size_t n;
 
@@ -3884,6 +3885,10 @@ local int option(char *arg)
         }
         else if (get == 3)
             g.sufx = arg;                       /* gz suffix */
+        else if (get == 4)
+            g.zopts.numiterations = num(arg);   /* optimization iterations */
+        else if (get == 5)
+            g.zopts.blocksplittingmax = num(arg);   /* max block splits */
         get = 0;
         return 0;
     }
