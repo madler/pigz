@@ -3291,12 +3291,6 @@ local void process(char *path)
         len = 0;
     }
     else {
-        /* set input file name (already set if recursed here) */
-        if (path != g.inf) {
-            strncpy(g.inf, path, sizeof(g.inf));
-            if (g.inf[sizeof(g.inf) - 1])
-                bail("name too long: ", path);
-        }
         len = strlen(g.inf);
 
         /* try to stat input file -- if not there and decoding, look for that
@@ -3917,6 +3911,10 @@ int main(int argc, char **argv)
     int noop;                       /* true to suppress option decoding */
     unsigned long done;             /* number of named files processed */
     char *opts, *p;                 /* environment default options, marker */
+    int inf_true;
+
+    /* initialize locals */
+    inf_true = 0;
 
     /* initialize globals */
     g.outf = NULL;
@@ -4000,9 +3998,19 @@ int main(int argc, char **argv)
             if (done == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
                 complain("warning: output will be concatenated zip files -- "
                          "will not be able to extract");
-            process(strcmp(argv[n], "-") ? argv[n] : NULL);
+            if (strcmp(argv[n], "-")) {
+                /* set input file name (already set if recursed here) */
+                if (argv[n] != g.inf) {
+                    inf_true = 1;
+                    strncpy(g.inf, argv[n], sizeof(g.inf));
+                    if (g.inf[sizeof(g.inf) - 1])
+                        bail("name too long: ", argv[n]);
+                }
+            }
             done++;
         }
+    if (inf_true)
+        process(g.inf);
     option(NULL);
 
     /* list stdin or compress stdin to stdout if no file names provided */
