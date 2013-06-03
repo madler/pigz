@@ -3,7 +3,7 @@ CFLAGS=-O3 -Wall -Wextra
 
 
 pigz: pigz.o yarn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) -o pigz $^ -lpthread -lz
+	$(CC) -o pigz $^ -lpthread -lz -lm
 	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h zopfli/deflate.h zopfli/util.h
