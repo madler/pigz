@@ -324,6 +324,17 @@
 #  include <sys/pstat.h>
 #endif
 
+#ifdef __MINGW32__
+#  define S_IFLNK      0
+#  define chown(a,b,c) 0
+#  define utimes(a,b)  0
+#  define lstat(a,b)   stat(a,b)
+#  define _exit(n)     exit(n)
+#  pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#  pragma GCC diagnostic ignored "-Wunused-parameter"
+#  pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
                            inflateBackInit(), inflateBack(), inflateBackEnd(),
