@@ -190,6 +190,20 @@ Compress to zlib (.zz) instead of gzip format.
 .TP
 .B --
 All arguments after "--" are treated as file names (for names that start with "-")
+.TP
+These options are unique to the -11 compression level:
+.TP
+.B -F  --first
+Do iterations first, before block split (default is last).
+.TP
+.B -I, --iterations n
+Number of iterations for optimization (default 15).
+.TP
+.B -M, --maxsplits n
+Maximum number of split blocks (default 15).
+.TP
+.B -O  --oneblock
+Do not split into smaller blocks (default is block splitting).
 .SH "COPYRIGHT NOTICE"
 This software is provided 'as-is', without any express or implied
 warranty.  In no event will the author be held liable for any damages
