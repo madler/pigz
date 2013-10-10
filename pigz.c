@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Mark Adler
- * Version 2.3.1  xx Mar 2013  Mark Adler
+ * Version 2.3.1  9 Oct 2013  Mark Adler
  */
 
 /*
@@ -154,7 +154,14 @@
                        Do not decompress concatenated zlib streams (just gzip)
                        Add option for compression level 11 to use zopfli
                        Fix handling of junk after compressed data
-   2.3.1  xx Mar 2013  -
+   2.3.1   9 Oct 2013  Fix builds of pigzt and pigzn to include zopfli
+                       Add -lm, needed to link log function on some systems
+                       Respect LDFLAGS in Makefile, use CFLAGS consistently
+                       Add memory allocation tracking
+                       Fix casting error in uncompressed length calculation
+                       Update zopfli to Mar 10, 2013 Google state
+                       Support zopfli in single thread case
+                       Add -F, -I, -M, and -O options for zopfli tuning
  */
 
 #define VERSION "pigz 2.3.1\n"

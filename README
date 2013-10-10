@@ -1,4 +1,4 @@
-pigz 2.2.6 (xx Oct 2012) by Mark Adler
+pigz 2.3.1 (9 Oct 2013) by Mark Adler
 
 pigz, which stands for Parallel Implementation of GZip, is a fully functional
 replacement for gzip that exploits multiple processors and multiple cores to
@@ -14,8 +14,10 @@ install the executable wherever you like in your path (e.g. /usr/local/bin/).
 Type "pigz" to see the command help and all of the command options.
 
 The latest version of pigz can be found at http://zlib.net/pigz/ .  You need
-zlib version 1.2.3 or later to compile pigz.  You can find the latest version
-of zlib at http://zlib.net/ .  You can look in pigz.c for the change history.
+zlib version 1.2.3 or later to compile pigz.  zlib version 1.2.6 or later is
+recommended, which reduces the overhead between blocks.  You can find the
+latest version of zlib at http://zlib.net/ .  You can look in pigz.c for the
+change history.
 
 Questions, comments, bug reports, fixes, etc. can be emailed to Mark at his
 address in the license below.
