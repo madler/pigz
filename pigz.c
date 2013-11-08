@@ -3031,7 +3031,8 @@ local void infchk(void)
     else if (was > 1 && get_header(0) != -5)
         complain("entries after the first in %s were ignored", g.inf);
     else if ((was == 0 && ret != -1) || (was == 1 && GET() != EOF))
-        complain("%s OK, has trailing junk which was ignored", g.inf);
+        fprintf(stderr, "%s OK, has trailing junk which was ignored\n", g.inf);
+        fflush(stderr);
 }
 
 /* --- decompress Unix compress (LZW) input --- */
