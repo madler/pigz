@@ -1,6 +1,6 @@
 CC=cc
 CFLAGS=-O3 -Wall -Wextra
-
+# use gcc and gmake on Solaris
 
 pigz: pigz.o yarn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
 	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lz -lm
