@@ -478,7 +478,6 @@ local struct {
     int procs;              /* maximum number of compression threads (>= 1) */
     int setdict;            /* true to initialize dictionary in each thread */
     size_t block;           /* uncompressed input size per thread (>= 32K) */
-    int warned;             /* true if a warning has been given */
 
     /* saved gzip/zip header data for decompression, testing, and listing */
     time_t stamp;               /* time stamp from gzip header */
@@ -519,7 +518,6 @@ local int complain(char *fmt, ...)
         va_end(ap);
         putc('\n', stderr);
         fflush(stderr);
-        g.warned = 1;
     }
     return 0;
 }
@@ -3929,7 +3927,6 @@ int main(int argc, char **argv)
     /* initialize globals */
     g.outf = NULL;
     g.first = 1;
-    g.warned = 0;
     g.hname = NULL;
 
     /* save pointer to program name for error messages */
@@ -4020,5 +4017,5 @@ int main(int argc, char **argv)
     /* done -- release resources, show log */
     new_opts();
     log_dump();
-    return g.warned ? 2 : 0;
+    return 0;
 }
