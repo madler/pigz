@@ -1424,7 +1424,7 @@ local void compress_thread(void *dummy)
 #if ZLIB_VERNUM >= 0x1260
     int bits;                       /* deflate pending bits */
 #endif
-    struct space *temp;             /* temporary space for zopfli input */
+    struct space *temp = NULL;      /* temporary space for zopfli input */
     z_stream strm;                  /* deflate stream */
 
     (void)dummy;
