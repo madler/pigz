@@ -1,9 +1,10 @@
 CC=cc
 CFLAGS=-O3 -Wall -Wextra
+LDFLAGS=-lz
 # use gcc and gmake on Solaris
 
 pigz: pigz.o yarn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lz -lm
+	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lm
 	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h zopfli/deflate.h zopfli/util.h
@@ -31,7 +32,7 @@ zopfli/katajainen.o: zopfli/katajainen.c zopfli/katajainen.h
 dev: pigz pigzt pigzn
 
 pigzt: pigzt.o yarnt.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) $(LDFLAGS) -o pigzt $^ -lpthread -lz -lm
+	$(CC) $(LDFLAGS) -o pigzt $^ -lpthread -lm
 
 pigzt.o: pigz.c yarn.h
 	$(CC) $(CFLAGS) -DDEBUG -g -c -o pigzt.o pigz.c
@@ -40,7 +41,7 @@ yarnt.o: yarn.c yarn.h
 	$(CC) $(CFLAGS) -DDEBUG -g -c -o yarnt.o yarn.c
 
 pigzn: pigzn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
-	$(CC) $(LDFLAGS) -o pigzn $^ -lz -lm
+	$(CC) $(LDFLAGS) -o pigzn $^ -lm
 
 pigzn.o: pigz.c
 	$(CC) $(CFLAGS) -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
