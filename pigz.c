@@ -3873,7 +3873,7 @@ local int option(char *arg)
             if (n != g.block >> 10 ||
                 OUTPOOL(g.block) < g.block ||
                 (ssize_t)OUTPOOL(g.block) < 0 ||
-                g.block > (1UL << 22))
+                g.block > (1UL << 30))
                 bail("block size too large: ", arg);
             new_opts();
         }
