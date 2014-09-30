@@ -2266,7 +2266,7 @@ local void in_init(void)
 }
 
 /* buffered reading macros for decompression and listing */
-#define GET() (g.in_eof || (g.in_left == 0 && load() == 0) ? EOF : \
+#define GET() (g.in_left == 0 && (g.in_eof || load() == 0) ? 0 : \
                (g.in_left--, *g.in_next++))
 #define GET2() (tmp2 = GET(), tmp2 + ((unsigned)(GET()) << 8))
 #define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
@@ -3029,7 +3029,7 @@ local void infchk(void)
         cat();
     else if (was > 1 && get_header(0) != -5)
         complain("entries after the first in %s were ignored", g.inf);
-    else if ((was == 0 && ret != -1) || (was == 1 && GET() != EOF))
+    else if ((was == 0 && ret != -1) || (was == 1 && (GET(), !g.in_eof)))
         complain("%s OK, has trailing junk which was ignored", g.inf);
 }
 
