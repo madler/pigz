@@ -3035,60 +3035,42 @@ local void infchk(void)
 
 /* --- decompress Unix compress (LZW) input --- */
 
-/* memory for unlzw() --
-   the first 256 entries of prefix[] and suffix[] are never used, could
-   have offset the index, but it's faster to waste the memory */
-unsigned short prefix[65536];           /* index to LZW prefix string */
-unsigned char suffix[65536];            /* one-character LZW suffix */
-unsigned char match[65280 + 2];         /* buffer for reversed match */
+/* Type for accumulating bits.  23 bits will be used to accumulate up to 16-bit
+   symbols. */
+typedef uint_fast32_t bits_t;
 
-/* throw out what's left in the current bits byte buffer (this is a vestigial
-   aspect of the compressed data format derived from an implementation that
-   made use of a special VAX machine instruction!) */
-#define FLUSHCODE() \
-    do { \
-        left = 0; \
-        rem = 0; \
-        if (chunk > g.in_left) { \
-            chunk -= g.in_left; \
-            if (load() == 0) \
-                break; \
-            if (chunk > g.in_left) { \
-                chunk = g.in_left = 0; \
-                break; \
-            } \
-        } \
-        g.in_left -= chunk; \
-        g.in_next += chunk; \
-        chunk = 0; \
-    } while (0)
+#define NOMORE() (g.in_left == 0 && (g.in_eof || load() == 0))
+#define NEXT() (g.in_left--, *g.in_next++)
 
 /* Decompress a compress (LZW) file from ind to outd.  The compress magic
    header (two bytes) has already been read and verified. */
 local void unlzw(void)
 {
-    int got;                    /* byte just read by GET() */
-    unsigned chunk;             /* bytes left in current chunk */
-    int left;                   /* bits left in rem */
-    unsigned rem;               /* unused bits from input */
-    int bits;                   /* current bits per code */
+    unsigned bits;              /* current bits per code (9..16) */
+    unsigned mask;              /* mask for current bits codes = (1<<bits)-1 */
+    bits_t buf;                 /* bit buffer (need 23 bits) */
+    unsigned left;              /* bits left in buf (0..7 after code pulled) */
+    off_t mark;                 /* offset where last change in bits began */
     unsigned code;              /* code, table traversal index */
-    unsigned mask;              /* mask for current bits codes */
-    int max;                    /* maximum bits per code for this stream */
-    int flags;                  /* compress flags, then block compress flag */
+    unsigned max;               /* maximum bits per code for this stream */
+    unsigned flags;             /* compress flags, then block compress flag */
     unsigned end;               /* last valid entry in prefix/suffix tables */
-    unsigned temp;              /* current code */
     unsigned prev;              /* previous code */
     unsigned final;             /* last character written for previous code */
     unsigned stack;             /* next position for reversed string */
     unsigned outcnt;            /* bytes in output buffer */
-    unsigned char *p;
+    /* memory for unlzw() -- the first 256 entries of prefix[] and suffix[] are
+       never used, so could have offset the index but it's faster to waste a
+       little memory */
+    uint_least16_t prefix[65536];       /* index to LZW prefix string */
+    unsigned char suffix[65536];        /* one-character LZW suffix */
+    unsigned char match[65280 + 2];     /* buffer for reversed match */
 
     /* process remainder of compress header -- a flags byte */
     g.out_tot = 0;
-    flags = GET();
-    if (g.in_eof)
-        bail("missing lzw data: ", g.inf);
+    if (NOMORE())
+        bail("lzw premature end: ", g.inf);
+    flags = NEXT();
     if (flags & 0x60)
         bail("unknown lzw flags set: ", g.inf);
     max = flags & 0x1f;
@@ -3098,24 +3080,28 @@ local void unlzw(void)
         max = 10;
     flags &= 0x80;                          /* true if block compress */
 
-    /* clear table */
+    /* mark the start of the compressed data for computing the first flush */
+    mark = g.in_tot - g.in_left;
+
+    /* clear table, start at nine bits per symbol */
     bits = 9;
     mask = 0x1ff;
     end = flags ? 256 : 255;
 
     /* set up: get first 9-bit code, which is the first decompressed byte, but
        don't create a table entry until the next code */
-    got = GET();
-    if (g.in_eof)                           /* no compressed data is ok */
+    if (NOMORE())                           /* no compressed data is ok */
         return;
-    final = prev = (unsigned)got;           /* low 8 bits of code */
-    got = GET();
-    if (g.in_eof || (got & 1) != 0)         /* missing a bit or code >= 256 */
+    buf = NEXT();
+    if (NOMORE())
+        bail("lzw premature end: ", g.inf); /* need at least nine bits */
+    buf += NEXT() << 8;
+    final = prev = buf & mask;              /* code */
+    buf >>= bits;
+    left = 16 - bits;
+    if (prev > 255)
         bail("invalid lzw code: ", g.inf);
-    rem = (unsigned)got >> 1;               /* remaining 7 bits */
-    left = 7;
-    chunk = bits - 2;                       /* 7 bytes left in this chunk */
-    out_buf[0] = (unsigned char)final;      /* write first decompressed byte */
+    out_buf[0] = final;                     /* write first decompressed byte */
     outcnt = 1;
 
     /* decode codes */
@@ -3123,42 +3109,71 @@ local void unlzw(void)
     for (;;) {
         /* if the table will be full after this, increment the code size */
         if (end >= mask && bits < max) {
-            FLUSHCODE();
+            /* flush unused input bits and bytes to next 8*bits bit boundary
+               (this is a vestigial aspect of the compressed data format
+               derived from an implementation that made use of a special VAX
+               machine instruction!) */
+            {
+                unsigned rem = ((g.in_tot - g.in_left) - mark) % bits;
+                if (rem)
+                    rem = bits - rem;
+                while (rem > g.in_left) {
+                    rem -= g.in_left;
+                    if (load() == 0)
+                        break;
+                }
+                g.in_left -= rem;
+                g.in_next += rem;
+            }
+            buf = 0;
+            left = 0;
+
+            /* mark this new location for computing the next flush */
+            mark = g.in_tot - g.in_left;
+
+            /* go to the next number of bits per symbol */
             bits++;
             mask <<= 1;
             mask++;
         }
 
-        /* get a code of length bits */
-        if (chunk == 0)                     /* decrement chunk modulo bits */
-            chunk = bits;
-        code = rem;                         /* low bits of code */
-        got = GET();
-        if (g.in_eof) {                     /* EOF is end of compressed data */
-            /* write remaining buffered output */
-            g.out_tot += outcnt;
-            if (outcnt && g.decode == 1)
-                writen(g.outd, out_buf, outcnt);
-            return;
-        }
-        code += (unsigned)got << left;      /* middle (or high) bits of code */
+        /* get a code of bits bits */
+        if (NOMORE())
+            break;                          /* end of compressed data */
+        buf += (bits_t)(NEXT()) << left;
         left += 8;
-        chunk--;
-        if (bits > left) {                  /* need more bits */
-            got = GET();
-            if (g.in_eof)                   /* can't end in middle of code */
-                bail("invalid lzw code: ", g.inf);
-            code += (unsigned)got << left;  /* high bits of code */
+        if (left < bits) {
+            if (NOMORE())
+                bail("lzw premature end: ", g.inf);
+            buf += (bits_t)(NEXT()) << left;
             left += 8;
-            chunk--;
         }
-        code &= mask;                       /* mask to current code length */
-        left -= bits;                       /* number of unused bits */
-        rem = (unsigned)got >> (8 - left);  /* unused bits from last byte */
+        code = buf & mask;
+        buf >>= bits;
+        left -= bits;
 
         /* process clear code (256) */
         if (code == 256 && flags) {
-            FLUSHCODE();
+            /* flush unused input bits and bytes to next 8*bits bit boundary */
+            {
+                unsigned rem = ((g.in_tot - g.in_left) - mark) % bits;
+                if (rem)
+                    rem = bits - rem;
+                while (rem > g.in_left) {
+                    rem -= g.in_left;
+                    if (load() == 0)
+                        break;
+                }
+                g.in_left -= rem;
+                g.in_next += rem;
+            }
+            buf = 0;
+            left = 0;
+
+            /* mark this new location for computing the next flush */
+            mark = g.in_tot - g.in_left;
+
+            /* go back to nine bits per symbol */
             bits = 9;                       /* initialize bits and mask */
             mask = 0x1ff;
             end = 255;                      /* empty table */
@@ -3166,41 +3181,36 @@ local void unlzw(void)
         }
 
         /* special code to reuse last match */
-        temp = code;                        /* save the current code */
-        if (code > end) {
-            /* Be picky on the allowed code here, and make sure that the code
-               we drop through (prev) will be a valid index so that random
-               input does not cause an exception.  The code != end + 1 check is
-               empirically derived, and not checked in the original uncompress
-               code.  If this ever causes a problem, that check could be safely
-               removed.  Leaving this check in greatly improves pigz's ability
-               to detect random or corrupted input after a compress header.
-               In any case, the prev > end check must be retained. */
-            if (code != end + 1 || prev > end)
-                bail("invalid lzw code: ", g.inf);
-            match[stack++] = (unsigned char)final;
-            code = prev;
-        }
+        {
+            unsigned temp = code;           /* save the current code */
+            if (code > end) {
+                /* Be picky on the allowed code here, and make sure that the
+                   code we drop through (prev) will be a valid index so that
+                   random input does not cause an exception. */
+                if (code != end + 1 || prev > end)
+                    bail("invalid lzw code: ", g.inf);
+                match[stack++] = final;
+                code = prev;
+            }
 
-        /* walk through linked list to generate output in reverse order */
-        p = match + stack;
-        while (code >= 256) {
-            *p++ = suffix[code];
-            code = prefix[code];
-        }
-        stack = p - match;
-        match[stack++] = (unsigned char)code;
-        final = code;
+            /* walk through linked list to generate output in reverse order */
+            while (code >= 256) {
+                match[stack++] = suffix[code];
+                code = prefix[code];
+            }
+            match[stack++] = code;
+            final = code;
 
-        /* link new table entry */
-        if (end < mask) {
-            end++;
-            prefix[end] = (unsigned short)prev;
-            suffix[end] = (unsigned char)final;
-        }
+            /* link new table entry */
+            if (end < mask) {
+                end++;
+                prefix[end] = prev;
+                suffix[end] = final;
+            }
 
-        /* set previous code for next iteration */
-        prev = temp;
+            /* set previous code for next iteration */
+            prev = temp;
+        }
 
         /* write output in forward order */
         while (stack > OUTSIZE - outcnt) {
@@ -3211,16 +3221,15 @@ local void unlzw(void)
                 writen(g.outd, out_buf, outcnt);
             outcnt = 0;
         }
-        p = match + stack;
         do {
-            out_buf[outcnt++] = *--p;
-        } while (p > match);
-        stack = 0;
-
-        /* loop for next code with final and prev as the last match, rem and
-           left provide the first 0..7 bits of the next code, end is the last
-           valid table entry */
+            out_buf[outcnt++] = match[--stack];
+        } while (stack);
     }
+
+    /* write any remaining buffered output */
+    g.out_tot += outcnt;
+    if (outcnt && g.decode == 1)
+        writen(g.outd, out_buf, outcnt);
 }
 
 /* --- file processing --- */
