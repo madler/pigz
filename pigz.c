@@ -967,6 +967,7 @@ local unsigned long put_header(void)
 {
     unsigned long len;
     unsigned char head[30];
+	unsigned int bsize; /* for bgzf */
 
     if (g.form > 1) {               /* zip */
         /* write local header */
@@ -1027,22 +1028,28 @@ local unsigned long put_header(void)
 			len = 16;
 			writen(g.outd, head, len);
 			/* Leave 2 bytes (uint16_t) BSIZE unwritten for now */
+			
 			if (g.name) {
 				
-				/* write a special no contents header to include the name */
-				PUT2L(head+len, len+2+strlen(g.name)+1 + BGZF_FOOTER_SIZE - 1);
+				/* write a special no contents block to include the FNAME field */
+				
+				/* write 2-byte BSIZE entry now */
+				bsize = len+2 + strlen(g.name)+1 + 2 + BGZF_FOOTER_SIZE - 1;
+				PUT2L(head+len, bsize);
 				writen(g.outd, head+len, 2);
+				fprintf(stderr, "first bgzf block with name bsize: %d %d %d\n", bsize, head[len], head[len+1]);
 				len += 2;
 				
+				/* write name */
 				writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
+				
+				/* empty zero-length Z_FINISH-ed compressed stream */
+				head[len] = 3; head[len+1] = 0;
+				write(g.outd, head+len, 2);
+
+				/* add the name size+1 */
 				len += strlen(g.name) + 1;
-				g.name = NULL; /* but do not write the name again */
-				
-				/* write a footer */
-				put_trailer(0,0,0,0);
-				
-				/* now put another header, but now g.name is NULL */
-				put_header();
+				g.name = NULL; /* but do not write the name ever again! */
 				
 			}
 		} else {
@@ -1574,9 +1581,9 @@ local void compress_thread(void *dummy)
 
                 /* run the last piece through deflate -- end on a byte
                    boundary, using a sync marker if necessary, or finish the
-                   deflate stream if this is the last block */
+                   deflate stream if this is the last block or a BGZF compliant gzip */
                 strm.avail_in = (unsigned)len;
-                if (left || job->more) {
+                if (g.bgzf == 0 && (left || job->more)) {
 #if ZLIB_VERNUM >= 0x1260
                     deflate_engine(&strm, job->out, Z_BLOCK);
 
@@ -1596,8 +1603,10 @@ local void compress_thread(void *dummy)
                     deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
 #endif
                 }
-                else
+				else {
                     deflate_engine(&strm, job->out, Z_FINISH);
+					fprintf(stderr, "finishing block uc: %d c: %d\n", len, strm.total_out);
+				}
             }
             else {
                 /* compress len bytes using zopfli, bring to byte boundary */
@@ -1721,32 +1730,34 @@ local void write_thread(void *dummy)
         more = job->more;
         len = job->in->len;
         drop_space(job->in);
-        ulen += (unsigned long)len;
-        clen += (unsigned long)(job->out->len);
 
         /* write the compressed data and drop the output buffer */
         Trace(("-- writing #%ld", seq));
+		
+		/* special logic for BGZF compliant gzip... finish the block and start a new one */
 		if (g.bgzf) {
-			if (seq > 0) {
-				/* write old footer */
-				put_trailer(ulen, clen, check, head);
-				/* reset counting */
-				ulen = clen = 0;
-				check = CHECK(0L, Z_NULL, 0);
-				/* Do not need to repeat name in the header after the first one. */
-				g.name = NULL;
-				/* write new header */
-				head = put_header();
-			}
+			put_trailer(ulen, clen, check, head);
+				
+			/* reset counting */
+			ulen = clen = 0;
+			check = CHECK(0L, Z_NULL, 0);
+
+			/* write new header */
+			head = put_header();
+			
 			/* write 2-byte BSIZE field */
 			head += 2;
 			assert( head >= BGZF_HEADER_SIZE);
 			assert(job->out->len + head + BGZF_FOOTER_SIZE <= BGZF_BLOCK_SIZE);
 			PUT2L(bsize_buf, (uint16_t) (job->out->len + head + BGZF_FOOTER_SIZE - 1));
-			writen(g.outd, bsize_buf, 4);
-			fprintf(stderr, "Wrote BGZF entry for block %lld: %d ulen %d. %d %d\n", seq, (job->out->len + head + BGZF_FOOTER_SIZE - 1), len, bsize_buf[0], bsize_buf[1]);
+			writen(g.outd, bsize_buf, 2);
+			fprintf(stderr, "Wrote BGZF entry for block %lld: %d ulen %lld. %d %d\n", seq, (job->out->len + head + BGZF_FOOTER_SIZE - 1), len, bsize_buf[0], bsize_buf[1]);
 
 		}
+		
+		ulen += (unsigned long)len;
+		clen += (unsigned long)(job->out->len);
+
         writen(g.outd, job->out->buf, job->out->len);
         drop_space(job->out);
         Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
@@ -1768,6 +1779,7 @@ local void write_thread(void *dummy)
 
     /* write trailer */
     put_trailer(ulen, clen, check, head);
+	
 	if (g.bgzf) {
 		/* write the final trailing EOF block */
 		writen(g.outd, (unsigned char*) bgzf_eof, 28);
@@ -2160,11 +2172,12 @@ local void single_compress(int reset)
                 got -= MAXP2;
             }
 
-            /* compress the remainder, emit a block, finish if end of input */
+            /* compress the remainder, emit a block, finish if end of input 
+			   of if this is a BGZF compliant gzip */
             strm->avail_in = (unsigned)got;
             got = left;
             check = CHECK(check, strm->next_in, strm->avail_in);
-            if (more || got) {
+            if (g.bgzf == 0 && (more || got)) {
 #if ZLIB_VERNUM >= 0x1260
                 int bits;
 
@@ -2241,6 +2254,12 @@ local void single_compress(int reset)
 
     /* write trailer */
     put_trailer(ulen, clen, check, head);
+	
+	if (g.bgzf) {
+		/* write the final trailing EOF block */
+		writen(g.outd, (unsigned char*) bgzf_eof, 28);
+	}
+
 }
 
 /* --- decompression --- */
@@ -3019,6 +3038,7 @@ local void infchk(void)
         /* decompress, compute lengths and check value */
         strm.avail_in = g.in_left;
         strm.next_in = g.in_next;
+		fprintf(stderr, "checking complen %d\n", strm.avail_in);
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         if (ret != Z_STREAM_END)
             bail("corrupted input -- invalid deflate data: ", g.inf);
@@ -3029,7 +3049,7 @@ local void infchk(void)
 
         /* compute compressed data length */
         clen = g.in_tot - g.in_left;
-
+		fprintf(stderr, "checked complen %lld, uncomlen %lld\n", clen, g.out_tot);
         /* read and check trailer */
         if (g.form > 1) {           /* zip local trailer (if any) */
             if (g.form == 3) {      /* data descriptor follows */
