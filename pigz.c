@@ -294,6 +294,12 @@
    the first set of compressions are being performed.  The number of output
    buffers is not directly limited, but is indirectly limited by the release of
    input buffers to about the same number.
+ 
+   TODO add BGZF Block Compress description and settings.
+        FNAME, FCOMMENT only in first block?
+        checksum may need to be tied to block, not continuous...
+		blocksize may need to be decreased somewhat accounting 
+        for BGZF_BLOCK_SIZE is not a multiple of 128k...
  */
 
 /* use large file functions if available */
@@ -450,6 +456,23 @@
 /* input buffer size */
 #define BUF 32768U
 
+/* BGZF constants */
+#define BGZF_MAX_BLOCK_SIZE 0x10000
+#define BGZF_BLOCK_SIZE     0x0ff00 // make sure compressed_bytes(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
+#define BGZF_HEADER_SIZE    18
+#define BGZF_FOOTER_SIZE    8
+/* BGZF/GZIP header (speciallized from RFC 1952; little endian):
+ +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ | 31|139|  8|  4|              0|  0|255|XLEN=6 | 66| 67|      2|BLK_LEN|
+ +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ ... compressed_data[ BLK_LEN - XLEN - 19 ]
+ +---+---+---+---+---+---+---+---+
+ |     CRC32     |     ISIZE     |
+ +---+---+---+---+---+---+---+---+
+ */
+/* bgzf_eof is the last block signifying EOF */
+local const uint8_t bgzf_eof[28]   = "\037\213\010\4\0\0\0\0\0\377\6\0\102\103\2\0\033\0\3\0\0\0\0\0\0\0\0\0";
+
 /* globals (modified by main thread only when it's the only thread) */
 local struct {
     char *prog;             /* name by which pigz was invoked */
@@ -463,6 +486,7 @@ local struct {
     int keep;               /* true to prevent deletion of input file */
     int force;              /* true to overwrite, compress links, cat */
     int form;               /* gzip = 0, zlib = 1, zip = 2 or 3 */
+	int bgzf;               /* true to include BGZF BlockCompress compliance */
     unsigned char magic1;   /* first byte of possible header when decoding */
     int recurse;            /* true to dive down into directory structure */
     char *sufx;             /* suffix to use (".gz" or user supplied) */
@@ -863,6 +887,81 @@ local unsigned long time2dos(time_t t)
 #define PUT4L(a,b) (PUT2L(a,(b)&0xffff),PUT2L((a)+2,(b)>>16))
 #define PUT4M(a,b) (*(a)=(b)>>24,(a)[1]=(b)>>16,(a)[2]=(b)>>8,(a)[3]=(b))
 
+/* write a gzip, zlib, or zip trailer */
+local void put_trailer(unsigned long ulen, unsigned long clen,
+					   unsigned long check, unsigned long head)
+{
+	unsigned char tail[46];
+	
+	if (g.form > 1) {               /* zip */
+		unsigned long cent;
+		
+		/* write data descriptor (as promised in local header) */
+		PUT4L(tail, 0x08074b50UL);
+		PUT4L(tail + 4, check);
+		PUT4L(tail + 8, clen);
+		PUT4L(tail + 12, ulen);
+		writen(g.outd, tail, 16);
+		
+		/* write central file header */
+		PUT4L(tail, 0x02014b50UL);  /* central header signature */
+		tail[4] = 63;               /* obeyed version 6.3 of the zip spec */
+		tail[5] = 255;              /* ignore external attributes */
+		PUT2L(tail + 6, 20);        /* version needed to extract (2.0) */
+		PUT2L(tail + 8, 8);         /* data descriptor is present */
+		PUT2L(tail + 10, 8);        /* deflate */
+		PUT4L(tail + 12, time2dos(g.mtime));
+		PUT4L(tail + 16, check);    /* crc */
+		PUT4L(tail + 20, clen);     /* compressed length */
+		PUT4L(tail + 24, ulen);     /* uncompressed length */
+		PUT2L(tail + 28, g.name == NULL ? 1 :   /* length of name */
+			  strlen(g.name));
+		PUT2L(tail + 30, 9);        /* length of extra field (see below) */
+		PUT2L(tail + 32, 0);        /* no file comment */
+		PUT2L(tail + 34, 0);        /* disk number 0 */
+		PUT2L(tail + 36, 0);        /* internal file attributes */
+		PUT4L(tail + 38, 0);        /* external file attributes (ignored) */
+		PUT4L(tail + 42, 0);        /* offset of local header */
+		writen(g.outd, tail, 46);   /* write central file header */
+		cent = 46;
+		
+		/* write file name (use "-" for stdin) */
+		if (g.name == NULL)
+			writen(g.outd, (unsigned char *)"-", 1);
+		else
+			writen(g.outd, (unsigned char *)g.name, strlen(g.name));
+		cent += g.name == NULL ? 1 : strlen(g.name);
+		
+		/* write extended timestamp extra field block (9 bytes) */
+		PUT2L(tail, 0x5455);        /* extended timestamp signature */
+		PUT2L(tail + 2, 5);         /* number of data bytes in this block */
+		tail[4] = 1;                /* flag presence of mod time */
+		PUT4L(tail + 5, g.mtime);   /* mod time */
+		writen(g.outd, tail, 9);    /* write extra field block */
+		cent += 9;
+		
+		/* write end of central directory record */
+		PUT4L(tail, 0x06054b50UL);  /* end of central directory signature */
+		PUT2L(tail + 4, 0);         /* number of this disk */
+		PUT2L(tail + 6, 0);         /* disk with start of central directory */
+		PUT2L(tail + 8, 1);         /* number of entries on this disk */
+		PUT2L(tail + 10, 1);        /* total number of entries */
+		PUT4L(tail + 12, cent);     /* size of central directory */
+		PUT4L(tail + 16, head + clen + 16); /* offset of central directory */
+		PUT2L(tail + 20, 0);        /* no zip file comment */
+		writen(g.outd, tail, 22);   /* write end of central directory record */
+	}
+	else if (g.form) {              /* zlib */
+		PUT4M(tail, check);
+		writen(g.outd, tail, 4);
+	}
+	else {                          /* gzip */
+		PUT4L(tail, check);
+		PUT4L(tail + 4, ulen);
+		writen(g.outd, tail, 8);
+	}
+}
+
 /* write a gzip, zlib, or zip header using the information in the globals */
 local unsigned long put_header(void)
 {
@@ -917,91 +1016,47 @@ local unsigned long put_header(void)
         head[3] = g.name != NULL ? 8 : 0;
         PUT4L(head + 4, g.mtime);
         head[8] = g.level >= 9 ? 2 : (g.level == 1 ? 4 : 0);
-        head[9] = 3;                /* unix */
-        writen(g.outd, head, 10);
-        len = 10;
-        if (g.name != NULL)
-            writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
-        if (g.name != NULL)
-            len += strlen(g.name) + 1;
+		head[9] = 3;                /* unix */
+		if (g.bgzf) {
+			head[3] |= 4;               /* include FEXTRA */
+			head[9] = 255;              /* unknown */
+			PUT2L(head+10, 6);          /* 6 byte XLEN */
+			head[12] = 'B';             /* BC tag */
+			head[13] = 'C';
+			PUT2L(head+14, 2);          /* 2 byte BSIZE field */
+			len = 16;
+			writen(g.outd, head, len);
+			/* Leave 2 bytes (uint16_t) BSIZE unwritten for now */
+			if (g.name) {
+				
+				/* write a special no contents header to include the name */
+				PUT2L(head+len, len+2+strlen(g.name)+1 + BGZF_FOOTER_SIZE - 1);
+				writen(g.outd, head+len, 2);
+				len += 2;
+				
+				writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
+				len += strlen(g.name) + 1;
+				g.name = NULL; /* but do not write the name again */
+				
+				/* write a footer */
+				put_trailer(0,0,0,0);
+				
+				/* now put another header, but now g.name is NULL */
+				put_header();
+				
+			}
+		} else {
+			writen(g.outd, head, 10);
+			len = 10;
+		}
+		if (g.name != NULL) {
+			writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
+			len += strlen(g.name) + 1;
+		}
     }
     return len;
 }
 
-/* write a gzip, zlib, or zip trailer */
-local void put_trailer(unsigned long ulen, unsigned long clen,
-                       unsigned long check, unsigned long head)
-{
-    unsigned char tail[46];
-
-    if (g.form > 1) {               /* zip */
-        unsigned long cent;
-
-        /* write data descriptor (as promised in local header) */
-        PUT4L(tail, 0x08074b50UL);
-        PUT4L(tail + 4, check);
-        PUT4L(tail + 8, clen);
-        PUT4L(tail + 12, ulen);
-        writen(g.outd, tail, 16);
-
-        /* write central file header */
-        PUT4L(tail, 0x02014b50UL);  /* central header signature */
-        tail[4] = 63;               /* obeyed version 6.3 of the zip spec */
-        tail[5] = 255;              /* ignore external attributes */
-        PUT2L(tail + 6, 20);        /* version needed to extract (2.0) */
-        PUT2L(tail + 8, 8);         /* data descriptor is present */
-        PUT2L(tail + 10, 8);        /* deflate */
-        PUT4L(tail + 12, time2dos(g.mtime));
-        PUT4L(tail + 16, check);    /* crc */
-        PUT4L(tail + 20, clen);     /* compressed length */
-        PUT4L(tail + 24, ulen);     /* uncompressed length */
-        PUT2L(tail + 28, g.name == NULL ? 1 :   /* length of name */
-                                          strlen(g.name));
-        PUT2L(tail + 30, 9);        /* length of extra field (see below) */
-        PUT2L(tail + 32, 0);        /* no file comment */
-        PUT2L(tail + 34, 0);        /* disk number 0 */
-        PUT2L(tail + 36, 0);        /* internal file attributes */
-        PUT4L(tail + 38, 0);        /* external file attributes (ignored) */
-        PUT4L(tail + 42, 0);        /* offset of local header */
-        writen(g.outd, tail, 46);   /* write central file header */
-        cent = 46;
-
-        /* write file name (use "-" for stdin) */
-        if (g.name == NULL)
-            writen(g.outd, (unsigned char *)"-", 1);
-        else
-            writen(g.outd, (unsigned char *)g.name, strlen(g.name));
-        cent += g.name == NULL ? 1 : strlen(g.name);
-
-        /* write extended timestamp extra field block (9 bytes) */
-        PUT2L(tail, 0x5455);        /* extended timestamp signature */
-        PUT2L(tail + 2, 5);         /* number of data bytes in this block */
-        tail[4] = 1;                /* flag presence of mod time */
-        PUT4L(tail + 5, g.mtime);   /* mod time */
-        writen(g.outd, tail, 9);    /* write extra field block */
-        cent += 9;
-
-        /* write end of central directory record */
-        PUT4L(tail, 0x06054b50UL);  /* end of central directory signature */
-        PUT2L(tail + 4, 0);         /* number of this disk */
-        PUT2L(tail + 6, 0);         /* disk with start of central directory */
-        PUT2L(tail + 8, 1);         /* number of entries on this disk */
-        PUT2L(tail + 10, 1);        /* total number of entries */
-        PUT4L(tail + 12, cent);     /* size of central directory */
-        PUT4L(tail + 16, head + clen + 16); /* offset of central directory */
-        PUT2L(tail + 20, 0);        /* no zip file comment */
-        writen(g.outd, tail, 22);   /* write end of central directory record */
-    }
-    else if (g.form) {              /* zlib */
-        PUT4M(tail, check);
-        writen(g.outd, tail, 4);
-    }
-    else {                          /* gzip */
-        PUT4L(tail, check);
-        PUT4L(tail + 4, ulen);
-        writen(g.outd, tail, 8);
-    }
-}
 
 /* compute check value depending on format */
 #define CHECK(a,b,c) (g.form == 1 ? adler32(a,b,c) : crc32(a,b,c))
@@ -1642,6 +1697,7 @@ local void write_thread(void *dummy)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
+	unsigned char bsize_buf[2];     /* for bgzf compliance */
 
     (void)dummy;
 
@@ -1654,7 +1710,7 @@ local void write_thread(void *dummy)
     check = CHECK(0L, Z_NULL, 0);
     seq = 0;
     do {
-        /* get next write job in order */
+		/* get next write job in order */
         possess(write_first);
         wait_for(write_first, TO_BE, seq);
         job = write_head;
@@ -1670,6 +1726,27 @@ local void write_thread(void *dummy)
 
         /* write the compressed data and drop the output buffer */
         Trace(("-- writing #%ld", seq));
+		if (g.bgzf) {
+			if (seq > 0) {
+				/* write old footer */
+				put_trailer(ulen, clen, check, head);
+				/* reset counting */
+				ulen = clen = 0;
+				check = CHECK(0L, Z_NULL, 0);
+				/* Do not need to repeat name in the header after the first one. */
+				g.name = NULL;
+				/* write new header */
+				head = put_header();
+			}
+			/* write 2-byte BSIZE field */
+			head += 2;
+			assert( head >= BGZF_HEADER_SIZE);
+			assert(job->out->len + head + BGZF_FOOTER_SIZE <= BGZF_BLOCK_SIZE);
+			PUT2L(bsize_buf, (uint16_t) (job->out->len + head + BGZF_FOOTER_SIZE - 1));
+			writen(g.outd, bsize_buf, 4);
+			fprintf(stderr, "Wrote BGZF entry for block %lld: %d ulen %d. %d %d\n", seq, (job->out->len + head + BGZF_FOOTER_SIZE - 1), len, bsize_buf[0], bsize_buf[1]);
+
+		}
         writen(g.outd, job->out->buf, job->out->len);
         drop_space(job->out);
         Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
@@ -1691,6 +1768,10 @@ local void write_thread(void *dummy)
 
     /* write trailer */
     put_trailer(ulen, clen, check, head);
+	if (g.bgzf) {
+		/* write the final trailing EOF block */
+		writen(g.outd, (unsigned char*) bgzf_eof, 28);
+	}
 
     /* verify no more jobs, prepare for next use */
     possess(compress_have);
@@ -2459,7 +2540,7 @@ local int get_header(int save)
         g.in_next--;
         return -2;
     }
-
+/* TODO */
     /* it's gzip -- get method and flags */
     method = GET();
     flags = GET();
@@ -3617,6 +3698,7 @@ local char *helptext[] = {
 "  -F  --first          Do iterations first, before block split for -11",
 "  -h, --help           Display a help screen and quit",
 "  -i, --independent    Compress blocks independently for damage recovery",
+"  -B, --bgzf           Create BGZF compliant gzip, includes -b 64 -i",
 "  -I, --iterations n   Number of iterations for -11 optimization",
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
@@ -3713,6 +3795,7 @@ local void defaults(void)
     g.force = 0;                    /* don't overwrite, don't compress links */
     g.recurse = 0;                  /* don't go into directories */
     g.form = 0;                     /* use gzip format */
+	g.bgzf = 0;                     /* do not create BGZF gzip */
 }
 
 /* long options conversion to short options */
@@ -3725,7 +3808,7 @@ local char *longopts[][2] = {
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
     {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
     {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
-    {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
+	{"version", "V"}, {"zip", "K"}, {"zlib", "z"}, {"bgzf", "B"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
 /* either new buffer size, new compression level, or new number of processes --
@@ -3844,6 +3927,7 @@ local int option(char *arg)
             case 'f':  g.force = 1;  break;
             case 'h':  help();  break;
             case 'i':  g.setdict = 0;  break;
+			case 'B':  g.bgzf = 1;  break;
             case 'k':  g.keep = 1;  break;
             case 'l':  g.list = 1;  break;
             case 'n':  g.headis &= ~1;  break;
@@ -4007,6 +4091,16 @@ int main(int argc, char **argv)
             if (done == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
                 complain("warning: output will be concatenated zip files -- "
                          "will not be able to extract");
+			if (g.bgzf) {
+				if (g.decode) {
+					/* decompressing.  make g.bgzf autodetected from input file */
+					g.bgzf = 0;
+				} else {
+					/* compressing. Override settings on block size and force independent checksums */
+					g.block = BGZF_BLOCK_SIZE;
+					g.setdict = 0;
+				}
+			}
             process(strcmp(argv[n], "-") ? argv[n] : NULL);
             done++;
         }
