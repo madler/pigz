@@ -1062,6 +1062,27 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
 /* compute check value depending on format */
 #define CHECK(a,b,c) (g.form == 1 ? adler32(a,b,c) : crc32(a,b,c))
 
+local void put_bgzf_trailer_and_header(unsigned long *ulen, unsigned long *clen,
+                                       unsigned long *check, unsigned long *head) {
+    unsigned char bsize_buf[2];
+    /* finish this block */
+    put_trailer(*ulen, *clen, *check, *head);
+
+    /* write new header for new block */
+    *head = put_header();
+
+    /* write 2-byte BSIZE field */
+    *head += 2;
+    assert( *head >= BGZF_HEADER_SIZE );
+    assert( *clen + *head + BGZF_FOOTER_SIZE <= BGZF_BLOCK_SIZE );
+    PUT2L(bsize_buf, (uint16_t) (*clen + *head + BGZF_FOOTER_SIZE - 1));
+    writen(g.outd, bsize_buf, 2);
+
+    /* reset counting */
+    *ulen = *clen = 0;
+    *check = CHECK(0L, Z_NULL, 0);
+}
+
 #ifndef NOTHREAD
 /* -- threaded portions of pigz -- */
 
@@ -1698,7 +1719,6 @@ local void write_thread(void *dummy)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
-    unsigned char bsize_buf[2];     /* for bgzf compliance */
 
     (void)dummy;
 
@@ -1723,32 +1743,17 @@ local void write_thread(void *dummy)
         len = job->in->len;
         drop_space(job->in);
 
-        /* write the compressed data and drop the output buffer */
-        Trace(("-- writing #%ld", seq));
-
-        /* special logic for BGZF compliant gzip... finish the block and start a new one */
+        
         if (g.bgzf) {
-            /* finish this block */
-            put_trailer(ulen, clen, check, head);
-
-            /* reset counting */
-            ulen = clen = 0;
-            check = CHECK(0L, Z_NULL, 0);
-
-            /* write new header for new block */
-            head = put_header();
-
-            /* write 2-byte BSIZE field */
-            head += 2;
-            assert( head >= BGZF_HEADER_SIZE);
-            assert(job->out->len + head + BGZF_FOOTER_SIZE <= BGZF_BLOCK_SIZE);
-            PUT2L(bsize_buf, (uint16_t) (job->out->len + head + BGZF_FOOTER_SIZE - 1));
-            writen(g.outd, bsize_buf, 2);
+            /* special logic for BGZF compliant gzip... finish the block and start a new one */
+            put_bgzf_trailer_and_header(&ulen, &clen, &check, &head);
         }
 
         ulen += (unsigned long)len;
         clen += (unsigned long)(job->out->len);
 
+        /* write the compressed data and drop the output buffer */
+        Trace(("-- writing #%ld", seq));
         writen(g.outd, job->out->buf, job->out->len);
         drop_space(job->out);
         Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
@@ -2138,6 +2143,10 @@ local void single_compress(int reset)
                 hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
             } while (hash != RSYNCHIT);
             got -= left;
+        }
+        
+        if (g.bgzf) {
+            put_bgzf_trailer_and_header(&ulen, &clen, &check, &head);
         }
 
         /* clear history for --independent option */
