@@ -1743,14 +1743,14 @@ local void write_thread(void *dummy)
         len = job->in->len;
         drop_space(job->in);
 
-        
+        clen += (unsigned long)(job->out->len);
+
         if (g.bgzf) {
             /* special logic for BGZF compliant gzip... finish the block and start a new one */
             put_bgzf_trailer_and_header(&ulen, &clen, &check, &head);
         }
 
         ulen += (unsigned long)len;
-        clen += (unsigned long)(job->out->len);
 
         /* write the compressed data and drop the output buffer */
         Trace(("-- writing #%ld", seq));
@@ -2006,9 +2006,20 @@ local void parallel_compress(void)
         do { \
             strm->avail_out = out_size; \
             strm->next_out = out; \
+            tmp_ulen = strm->avail_in; \
+            check = CHECK(check, strm->next_in, strm->avail_in); \
             (void)deflate(strm, flush); \
-            writen(g.outd, out, out_size - strm->avail_out); \
             clen += out_size - strm->avail_out; \
+            if (g.bgzf) { \
+                /*tmp_ulen = ulen;*/ \
+                tmp_check = check; \
+                put_bgzf_trailer_and_header(&last_ulen, &clen, &last_check, &head); \
+                ulen = last_ulen; \
+                check = last_check; \
+                last_ulen = tmp_ulen; \
+                last_check = tmp_check; \
+            } \
+            writen(g.outd, out, out_size - strm->avail_out); \
         } while (strm->avail_out == 0); \
         assert(strm->avail_in == 0); \
     } while (0)
@@ -2031,6 +2042,9 @@ local void single_compress(int reset)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
+    unsigned long last_ulen;        /* previous block uncompressed size */
+    unsigned long last_check;       /* previous block checksum */
+    unsigned long tmp_ulen, tmp_check;
     static unsigned out_size;       /* size of output buffer */
     static unsigned char *in, *next, *out;  /* reused i/o buffers */
     static z_stream *strm = NULL;   /* reused deflate structure */
@@ -2082,6 +2096,8 @@ local void single_compress(int reset)
     clen = 0;
     have = 0;
     check = CHECK(0L, Z_NULL, 0);
+    last_check = check;
+    last_ulen = 0;
     hash = RSYNCHIT;
     do {
         /* get data to compress, see if there is any more input */
@@ -2145,10 +2161,6 @@ local void single_compress(int reset)
             got -= left;
         }
         
-        if (g.bgzf) {
-            put_bgzf_trailer_and_header(&ulen, &clen, &check, &head);
-        }
-
         /* clear history for --independent option */
         fresh = 0;
         if (!g.setdict) {
@@ -2167,16 +2179,15 @@ local void single_compress(int reset)
             /* compress MAXP2-size chunks in case unsigned type is small */
             while (got > MAXP2) {
                 strm->avail_in = MAXP2;
-                check = CHECK(check, strm->next_in, strm->avail_in);
                 DEFLATE_WRITE(Z_NO_FLUSH);
                 got -= MAXP2;
             }
 
             /* compress the remainder, emit a block, finish if end of input 
-             of if this is a BGZF compliant gzip */
+               or if this is a BGZF compliant gzip 
+             */
             strm->avail_in = (unsigned)got;
             got = left;
-            check = CHECK(check, strm->next_in, strm->avail_in);
             if (g.bgzf == 0 && (more || got)) {
 #if ZLIB_VERNUM >= 0x1260
                 int bits;
@@ -2253,11 +2264,12 @@ local void single_compress(int reset)
     } while (more || got);
 
     /* write trailer */
-    put_trailer(ulen, clen, check, head);
-
     if (g.bgzf) {
         /* write the final trailing EOF block */
+        put_trailer(last_ulen, clen, last_check, head);
         writen(g.outd, (unsigned char*) bgzf_eof, 28);
+    } else {
+        put_trailer(ulen, clen, check, head);
     }
 
 }
