@@ -452,9 +452,6 @@
 #define INBUFS(p) (((p)<<1)+3)
 #define OUTPOOL(s) ((s)+((s)>>4)+DICT)
 
-/* input buffer size */
-#define BUF 32768U
-
 /* BGZF constants */
 #define BGZF_MAX_BLOCK_SIZE 0x10000
 #define BGZF_BLOCK_SIZE     0x0ff00 // make sure compressed_bytes(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
@@ -472,6 +469,9 @@
 /* bgzf_eof is the last block signifying EOF */
 local const uint8_t bgzf_eof[28]   = "\037\213\010\4\0\0\0\0\0\377\6\0\102\103\2\0\033\0\3\0\0\0\0\0\0\0\0\0";
 
+/* input buffer size */
+#define BUF BGZF_MAX_BLOCK_SIZE
+
 /* globals (modified by main thread only when it's the only thread) */
 local struct {
     char *prog;             /* name by which pigz was invoked */
@@ -486,6 +486,7 @@ local struct {
     int force;              /* true to overwrite, compress links, cat */
     int form;               /* gzip = 0, zlib = 1, zip = 2 or 3 */
     int bgzf;               /* true to include BGZF BlockCompress compliance */
+    int bgzf_bsize;         /* the remainder size of the next block to decompress */
     unsigned char magic1;   /* first byte of possible header when decoding */
     int recurse;            /* true to dive down into directory structure */
     char *sufx;             /* suffix to use (".gz" or user supplied) */
@@ -1063,7 +1064,8 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
 #define CHECK(a,b,c) (g.form == 1 ? adler32(a,b,c) : crc32(a,b,c))
 
 local void put_bgzf_trailer_and_header(unsigned long *ulen, unsigned long *clen,
-                                       unsigned long *check, unsigned long *head) {
+                                       unsigned long *check, unsigned long *head)
+{
     unsigned char bsize_buf[2];
     /* finish this block */
     put_trailer(*ulen, *clen, *check, *head);
@@ -1263,17 +1265,34 @@ local struct space *get_space(struct pool *pool)
         pool->limit--;
     pool->made++;
     release(pool->have);
+    space = NULL;
     space = MALLOC(sizeof(struct space));
-    if (space == NULL)
-        bail("not enough memory", "");
-    space->use = new_lock(1);           /* initially one user */
-    space->buf = MALLOC(pool->size);
-    if (space->buf == NULL)
-        bail("not enough memory", "");
-    space->size = pool->size;
-    space->len = 0;
-    space->pool = pool;                 /* remember the pool this belongs to */
-    return space;
+    if (space != NULL) {
+        space->buf = NULL;
+        space->buf = MALLOC(pool->size);
+        if (space->buf != NULL) {
+            space->use = new_lock(1);           /* initially one user */
+            space->size = pool->size;
+            space->len = 0;
+            space->pool = pool;                 /* remember the pool this belongs to */
+            return space;
+        }
+    }
+    assert( space == NULL || space->buf == NULL );
+    if (pool->limit < 0 && pool->made > 1) {
+        possess(pool->have);
+        if (space != NULL) {
+            FREE(space);
+        }
+        pool->limit = 0; /* do not make any more buffers */
+        pool->made--;
+        complain("Running out of memory with %d buffers of %d bytes, reducing buffer count\n", pool->made, pool->size);
+        twist(pool->have, TO, 0);
+        /* try again this time waiting for an existing buffer */
+        return get_space(pool);
+    }
+    bail("not enough memory", "");
+    return NULL;
 }
 
 /* compute next size up by multiplying by about 2**(1/3) and round to the next
@@ -1482,6 +1501,128 @@ local void deflate_engine(z_stream *strm, struct space *out, int flush)
         out->len = strm->next_out - out->buf;
     } while (strm->avail_out == 0);
     assert(strm->avail_in == 0);
+}
+
+local void uncompress_thread(void *dummy)
+{
+    int ret, i;
+    struct job *job;                /* job pulled and working on */
+    struct job *here, **prior;      /* pointers for inserting in write list */
+    struct space *out;              /* pointer to output buffer */
+    unsigned long check, incheck;   /* check value of uncompressed output */
+    unsigned long len, inlen;       /* length of uncompressed output */
+    z_stream strm;                  /* inflate stream */
+    
+    (void)dummy;
+    
+    // prepare strm for inflate
+    strm.zalloc = ZALLOC;
+    strm.zfree = ZFREE;
+    strm.opaque = OPAQUE;
+ 
+    ret = inflateInit2(&strm, -15);
+    if (ret != Z_OK) {
+        bail("not enough memory", "");
+    }
+
+    /* keep looking for work */
+    for (;;) {
+        assert(g.form == 0 && g.bgzf); /* this must be BGZF */
+        
+        /* acquire and allocate output buffer */
+        out = get_space(&out_pool);
+        while( out->size < BGZF_FOOTER_SIZE) {
+            grow_space(out);
+        }
+        out->len = 0;
+        
+        /* get a job (like I tell my son) */
+        possess(compress_have);
+        wait_for(compress_have, NOT_TO_BE, 0);
+        job = compress_head;
+        assert(job != NULL);
+        if (job->seq == -1)
+            break;
+        compress_head = job->next;
+        if (job->next == NULL)
+        compress_tail = &compress_head;
+        twist(compress_have, BY, -1);
+        
+        /* get output buffer space */
+        if (job->out != NULL) {
+            drop_space(job->out);
+        }
+        job->out = out;
+        
+        assert(job->in != NULL && job->in->len > BGZF_FOOTER_SIZE);
+        
+        /* decompress, compute lengths and check value */
+        strm.total_in = strm.total_out = 0;
+        
+        strm.next_in = job->in->buf;
+        strm.avail_in = job->in->len;
+        
+        strm.next_out = out->buf;
+        strm.avail_out = out->size;
+
+        fprintf(stderr, "initialzed new bgzf block\n");
+        
+        ret = inflate(&strm, Z_FINISH);
+        if (ret != Z_STREAM_END) {
+            bail("corrupted input -- invalid BGZF deflate data: ", g.inf);
+        }
+        
+        if (strm.avail_in != BGZF_FOOTER_SIZE) {
+            bail("corrupted input -- invalid byte count in BGZF block", g.inf);
+        }
+        
+        if (inflateReset(&strm) != Z_OK) {
+            bail("corrupted input -- inflateReset failed in BGZF block", g.inf);
+        }
+
+        /* compute and record uncompressed data length */
+        len = strm.total_out;
+        out->len = len;
+        incheck = 0;
+        for(i=0; i<3;i++) {
+            incheck += *(out->buf + len + i) << 8*i;
+        }
+        inlen = 0;
+        for(i=0; i<3; i++) {
+            inlen += *(out->buf + len + 4 + i) << 8*i;
+        }
+        
+        /* compute uncompressed data check */
+        check = CHECK(0L, Z_NULL, 0);
+        check = CHECK(check, out->buf, out->len);
+
+        /* read and check trailer */
+        /* gzip trailer */
+        if (check != incheck || len != inlen) {
+            complain("Calculated %d check and %d length, but got %d and %d in the footer\n", check, len, incheck, inlen);
+            bail("corrupted input checksum or length in BGZF block", g.inf);
+        }
+
+        /* insert write job in list in sorted order, alert write thread */
+        possess(write_first);
+        prior = &write_head;
+        while ((here = *prior) != NULL) {
+            if (here->seq > job->seq)
+            break;
+            prior = &(here->next);
+        }
+        job->next = here;
+        *prior = job;
+        twist(write_first, TO, write_head->seq);
+
+    }
+    if (inflateEnd(&strm) != Z_OK) {
+        bail("corrupted input -- inflateEnd failed in BGZF block", g.inf);
+    }
+
+    
+    /* found job with seq == -1 -- free deflate memory and return to join */
+    release(compress_have);
 }
 
 /* get the next compression job from the head of the list, compress and compute
@@ -1707,8 +1848,9 @@ local void compress_thread(void *dummy)
 }
 
 /* collect the write jobs off of the list in sequence order and write out the
-   compressed data until the last chunk is written -- also write the header and
-   trailer and combine the individual check values of the input buffers */
+   output data until the last chunk is written.
+   if decoding, also write the header and trailer and combine the individual
+   check values of the input buffers */
 local void write_thread(void *dummy)
 {
     long seq;                       /* next sequence number looking for */
@@ -1724,8 +1866,9 @@ local void write_thread(void *dummy)
 
     /* build and write header */
     Trace(("-- write thread running"));
-    head = put_header();
-
+    if (!g.decode) {
+        head = put_header();
+    }
     /* process output of compress threads until end of input */
     ulen = clen = 0;
     check = CHECK(0L, Z_NULL, 0);
@@ -1745,7 +1888,7 @@ local void write_thread(void *dummy)
 
         clen += (unsigned long)(job->out->len);
 
-        if (g.bgzf) {
+        if (g.bgzf && !g.decode) {
             /* special logic for BGZF compliant gzip... finish the block and start a new one */
             put_bgzf_trailer_and_header(&ulen, &clen, &check, &head);
         }
@@ -1758,27 +1901,30 @@ local void write_thread(void *dummy)
         drop_space(job->out);
         Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
 
-        /* wait for check calculation to complete, then combine, once
-           the compress thread is done with the input, release it */
-        possess(job->calc);
-        wait_for(job->calc, TO_BE, 1);
-        release(job->calc);
-        check = COMB(check, job->check, len);
-
-        /* free the job */
-        free_lock(job->calc);
+        if (!g.decode) {
+            /* wait for check calculation to complete, then combine, once
+             the compress thread is done with the input, release it */
+            possess(job->calc);
+            wait_for(job->calc, TO_BE, 1);
+            release(job->calc);
+            check = COMB(check, job->check, len);
+            
+            /* free the job */
+            free_lock(job->calc);
+        }
         FREE(job);
 
         /* get the next buffer in sequence */
         seq++;
     } while (more);
 
-    /* write trailer */
-    put_trailer(ulen, clen, check, head);
-
-    if (g.bgzf) {
-        /* write the final trailing EOF block */
-        writen(g.outd, (unsigned char*) bgzf_eof, 28);
+    if (!g.decode) {
+        /* write trailer */
+        put_trailer(ulen, clen, check, head);
+        if (g.bgzf) {
+            /* write the final trailing EOF block */
+            writen(g.outd, (unsigned char*) bgzf_eof, 28);
+        }
     }
 
     /* verify no more jobs, prepare for next use */
@@ -2011,7 +2157,6 @@ local void parallel_compress(void)
             (void)deflate(strm, flush); \
             clen += out_size - strm->avail_out; \
             if (g.bgzf) { \
-                /*tmp_ulen = ulen;*/ \
                 tmp_check = check; \
                 put_bgzf_trailer_and_header(&last_ulen, &clen, &last_check, &head); \
                 ulen = last_ulen; \
@@ -2044,7 +2189,7 @@ local void single_compress(int reset)
     unsigned long check;            /* check value of uncompressed data */
     unsigned long last_ulen;        /* previous block uncompressed size */
     unsigned long last_check;       /* previous block checksum */
-    unsigned long tmp_ulen, tmp_check;
+    unsigned long tmp_check, tmp_ulen;
     static unsigned out_size;       /* size of output buffer */
     static unsigned char *in, *next, *out;  /* reused i/o buffers */
     static z_stream *strm = NULL;   /* reused deflate structure */
@@ -2289,6 +2434,7 @@ local void load_read(void *dummy)
         possess(g.load_state);
         wait_for(g.load_state, TO_BE, 1);
         g.in_len = len = readn(g.ind, g.in_which ? g.in_buf : g.in_buf2, BUF);
+        fprintf(stderr, "load_read read %zu using %d\n", g.in_len, g.in_which);
         Trace(("-- decompress read thread read %lu bytes", len));
         twist(g.load_state, TO, 0);
     } while (len == BUF);
@@ -2309,7 +2455,7 @@ local size_t load(void)
         g.in_left = 0;
         return 0;
     }
-
+    
 #ifndef NOTHREAD
     /* if first time in or procs == 1, read a buffer to have something to
        return, otherwise wait for the previous read job to complete */
@@ -2320,7 +2466,7 @@ local size_t load(void)
             g.load_state = new_lock(1);
             g.load_thread = launch(load_read, NULL);
         }
-
+        fprintf(stderr, "about to read from buffer %d\n", BUF);
         /* wait for the previously requested read to complete */
         possess(g.load_state);
         wait_for(g.load_state, TO_BE, 0);
@@ -2329,6 +2475,7 @@ local size_t load(void)
         /* set up input buffer with the data just read */
         g.in_next = g.in_which ? g.in_buf : g.in_buf2;
         g.in_left = g.in_len;
+        fprintf(stderr, "read %zu from thread using %d\n", g.in_left, g.in_which);
 
         /* if not at end of file, alert read thread to load next buffer,
            alternate between g.in_buf and g.in_buf2 */
@@ -2350,6 +2497,7 @@ local size_t load(void)
     {
         /* don't use threads -- simply read a buffer into g.in_buf */
         g.in_left = readn(g.ind, g.in_next = g.in_buf, BUF);
+        fprintf(stderr, "read no thread %zu of %d\n", g.in_left, BUF);
     }
 
     /* note end of file */
@@ -2490,7 +2638,10 @@ local int get_header(int save)
     unsigned magic;             /* magic header */
     int method;                 /* compression method */
     int flags;                  /* header flags */
+    int count;                  /* number of bytes read */
     unsigned fname, extra;      /* name and extra field lengths */
+    char c1, c2;                /* for parsing extra field type */
+    unsigned field_len;         /* for parsing extra field */
     unsigned tmp2;              /* for macro */
     unsigned long tmp4;         /* for macro */
 
@@ -2571,7 +2722,7 @@ local int get_header(int save)
         g.in_next--;
         return -2;
     }
-/* TODO */
+
     /* it's gzip -- get method and flags */
     method = GET();
     flags = GET();
@@ -2589,13 +2740,29 @@ local int get_header(int save)
     /* skip extra field and OS */
     SKIP(2);
 
-    /* skip extra field, if present */
+    /* parse extra field, if present */
+    g.bgzf = g.bgzf_bsize = extra = 0; /* assume it is NOT BGZF */
     if (flags & 4) {
         extra = GET2();
         if (g.in_eof)
             return -3;
-        SKIP(extra);
+        // parse extra field(s) look for BC && set g.bgzf to bsize, if present
+        count = extra;
+        g.bgzf_bsize = 0;
+        while (count > 0) {
+            c1 = GET(); c2 = GET(); field_len = GET2();
+            if (c1 == 'B' && c2 == 'C' && field_len == 2) {
+                /* read the BGZF block size value */
+                g.bgzf = 1;
+                g.bgzf_bsize = GET2();
+                fprintf(stderr, "Found bgzf size %d\n", g.bgzf_bsize);
+            } else {
+                SKIP(field_len);
+            }
+            count -= 4 + field_len;
+        }
     }
+    count = extra + 12;
 
     /* read file name, if present, into allocated memory */
     if ((flags & 8) && save) {
@@ -2621,23 +2788,38 @@ local int get_header(int save)
             have += copy;
             g.in_left -= copy;
             g.in_next += copy;
+            count+=copy;
         } while (end == NULL);
     }
-    else if (flags & 8)
-        while (GET() != 0)
+    else if (flags & 8) {
+        while (GET() != 0) {
             if (g.in_eof)
                 return -3;
+            count++;
+        }
+    }
 
     /* skip comment */
     if (flags & 16)
-        while (GET() != 0)
+        while (GET() != 0) {
             if (g.in_eof)
                 return -3;
+            count++;
+        }
 
     /* skip header crc */
-    if (flags & 2)
+    if (flags & 2) {
         SKIP(2);
+        count += 2;
+    }
 
+    if (g.bgzf && g.bgzf_bsize) {
+        // subtract for header bytes already read, but include trailer bytes at the end...
+        assert(g.bgzf_bsize > count + BGZF_FOOTER_SIZE - 1);
+        assert(count >= BGZF_HEADER_SIZE);
+        g.bgzf_bsize = g.bgzf_bsize - count + 1;
+    }
+    fprintf(stderr, "get_header: count: %d bgzf: %d\n", count, g.bgzf_bsize);
     /* return gzip compression method */
     g.form = 0;
     return method;
@@ -3028,36 +3210,110 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
 local void infchk(void)
 {
     int ret, cont, was;
-    unsigned long check, len;
+    unsigned long check, len, seq, block_len;
     z_stream strm;
     unsigned tmp2;
     unsigned long tmp4;
     off_t clen;
+    struct job *job;
 
     cont = 0;
+    assert(g.decode);
+    
+#ifndef NOTHREAD
+    if (g.form == 0 && g.bgzf && g.procs > 1) {
+        /* This is a BGZF gzip file, decompress all blocks in parallel until the form changes */
+        setup_jobs();
+        /* start write thread */
+        writeth = launch(write_thread, NULL);
+        
+        seq = 0;
+        job = NULL;
+        do {
+            
+            /* create a new job */
+            job = MALLOC(sizeof(struct job));
+            if (job == NULL) {
+                bail("not enough memory", "");
+            }
+            job->calc = NULL; // no calc lock in decode
+            
+            /* update input spaces */
+            block_len = g.bgzf_bsize;
+            job->in = get_space(&in_pool);
+            job->in->len = 0;
+            while (job->in->size < block_len) {
+                grow_space(job->in);
+            }
+            job->in->len += readn(g.ind, job->in->buf, block_len);
+            if (job->in->len != (size_t) g.bgzf_bsize) {
+                bail("incomplete BGZF gzip -- reached eof", "");
+            }
+            job->more = 1;
+
+            /* preparation of job is complete */
+            job->seq = seq;
+            Trace(("-- read #%ld%s", ""));
+            if (++seq < 1)
+            bail("input too long: ", g.inf);
+            
+            /* start another uncompress thread if needed */
+            if ((unsigned long) cthreads < seq && cthreads < g.procs) {
+                (void)launch(uncompress_thread, NULL);
+                cthreads++;
+            }
+            
+            was = g.form;
+            
+            ret = get_header(0);
+            if (ret != 8) {
+                job->more = 0;
+            }
+            
+            /* put job at end of compress list, let all the compressors know */
+            possess(compress_have);
+            job->next = NULL;
+            *compress_tail = job;
+            compress_tail = &(job->next);
+            twist(compress_have, BY, +1);
+            
+        } while (was == 0 && ret == 8 && g.form == 0 && g.bgzf && g.bgzf_bsize);
+        
+        /* wait for the write thread to complete (we leave the compress threads out
+         there and waiting in case there is another stream to compress) */
+        join(writeth);
+        writeth = NULL;
+        if ( ret != 8 ) {
+            return;
+        }
+    }
+#endif
+
     do {
         /* header already read -- set up for decompression */
         g.in_tot = g.in_left;       /* track compressed data length */
         g.out_tot = 0;
         g.out_check = CHECK(0L, Z_NULL, 0);
+        
         strm.zalloc = ZALLOC;
         strm.zfree = ZFREE;
         strm.opaque = OPAQUE;
         ret = inflateBackInit(&strm, 15, out_buf);
         if (ret != Z_OK)
-            bail("not enough memory", "");
-
+        bail("not enough memory", "");
+        fprintf(stderr, "initialzed new block\n");
+        
         /* decompress, compute lengths and check value */
         strm.avail_in = g.in_left;
         strm.next_in = g.in_next;
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         if (ret != Z_STREAM_END)
-            bail("corrupted input -- invalid deflate data: ", g.inf);
+        bail("corrupted input -- invalid deflate data: ", g.inf);
         g.in_left = strm.avail_in;
         g.in_next = strm.next_in;
         inflateBackEnd(&strm);
         outb(NULL, NULL, 0);        /* finish off final write and check */
-
+        
         /* compute compressed data length */
         clen = g.in_tot - g.in_left;
 
@@ -3122,6 +3378,7 @@ local void infchk(void)
                 bail("corrupted gzip stream -- crc32 mismatch: ", g.inf);
             if (len != (g.out_tot & LOW32))
                 bail("corrupted gzip stream -- length mismatch: ", g.inf);
+            fprintf(stderr, "got trailer check %lu, ulen: %lu\n", check, len);
         }
 
         /* show file information if requested */
@@ -3729,7 +3986,7 @@ local char *helptext[] = {
 "  -F  --first          Do iterations first, before block split for -11",
 "  -h, --help           Display a help screen and quit",
 "  -i, --independent    Compress blocks independently for damage recovery",
-"  -B, --bgzf           Create BGZF compliant gzip, includes -b 64 -i",
+"  -B, --bgzf           Create BGZF compliant gzip. (overrides -b and -i)",
 "  -I, --iterations n   Number of iterations for -11 optimization",
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
@@ -3827,6 +4084,7 @@ local void defaults(void)
     g.recurse = 0;                  /* don't go into directories */
     g.form = 0;                     /* use gzip format */
     g.bgzf = 0;                     /* do not create BGZF gzip */
+    g.bgzf_bsize = 0;               /* size of bgzf block if this is a BGZF decompress */
 }
 
 /* long options conversion to short options */
@@ -4124,8 +4382,10 @@ int main(int argc, char **argv)
                          "will not be able to extract");
             if (g.bgzf) {
                 if (g.decode) {
-                    /* decompressing.  make g.bgzf autodetected from input file */
+                    /* decompressing.  Ignore this hint as BGZF autodetected from gzip header,
+                     and use g.bgzf_bsize as next block size when reading */
                     g.bgzf = 0;
+                    g.block = BGZF_MAX_BLOCK_SIZE;
                 } else {
                     /* compressing. Override settings on block size and force independent checksums */
                     g.block = BGZF_BLOCK_SIZE;
