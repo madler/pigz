@@ -3254,6 +3254,7 @@ local void infchk(void)
             /* update input spaces */
             block_len = g.bgzf_bsize;
             input = get_space(&in_pool);
+
             while (input->size < block_len) {
                 grow_space(input);
             }
@@ -3316,6 +3317,11 @@ local void infchk(void)
              there and waiting in case there is another stream to compress) */
             join(writeth);
             writeth = NULL;
+        } else {
+            /* wait for last block to be processed */
+            possess(compress_have);
+            wait_for(compress_have, TO_BE, 0);
+            release(compress_have);
         }
         
         if ( ret != 8 ) {
