@@ -1461,6 +1461,8 @@ local void finish_jobs(void)
     possess(compress_have);
     job.seq = -1;
     job.next = NULL;
+    job.in = NULL;
+    job.out = NULL;
     compress_head = &job;
     compress_tail = &(job.next);
     twist(compress_have, BY, +1);       /* will wake them all up */
@@ -1532,6 +1534,7 @@ local void uncompress_thread(void *dummy)
     /* keep looking for work */
     for (;;) {
         
+        job = NULL;
         /* acquire and allocate output buffer */
         out = get_space(&out_pool);
         while( out->size < BGZF_MAX_BLOCK_SIZE) {
@@ -1544,8 +1547,10 @@ local void uncompress_thread(void *dummy)
         wait_for(compress_have, NOT_TO_BE, 0);
         job = compress_head;
         assert(job != NULL);
-        if (job->seq == -1)
+        if (job->seq == -1) {
+            job = NULL;
             break;
+        }
         
         compress_head = job->next;
         if (job->next == NULL)
@@ -1596,24 +1601,31 @@ local void uncompress_thread(void *dummy)
         check = CHECK(0L, Z_NULL, 0);
         check = CHECK(check, out->buf, out->len);
 
-        /* read and check trailer */
-        /* gzip trailer */
+        /* check gzip trailer */
         if (check != incheck || len != inlen) {
             complain("Calculated %lu check and %lu length, but got %lu and %lu in the footer\n", check, len, incheck, inlen);
             bail("corrupted input checksum or length in BGZF block", g.inf);
         }
-
-        /* insert write job in list in sorted order, alert write thread */
-        possess(write_first);
-        prior = &write_head;
-        while ((here = *prior) != NULL) {
-            if (here->seq > job->seq)
-            break;
-            prior = &(here->next);
+        
+        if (g.decode == 1) {
+            
+            /* insert write job in list in sorted order, alert write thread */
+            possess(write_first);
+            prior = &write_head;
+            while ((here = *prior) != NULL) {
+                if (here->seq > job->seq)
+                break;
+                prior = &(here->next);
+            }
+            job->next = here;
+            *prior = job;
+            twist(write_first, TO, write_head->seq);
+            
+        } else {
+            drop_space(job->in);
+            drop_space(job->out);
+            FREE(job);
         }
-        job->next = here;
-        *prior = job;
-        twist(write_first, TO, write_head->seq);
 
     }
     if (inflateEnd(&strm) != Z_OK) {
@@ -3219,8 +3231,10 @@ local void infchk(void)
     if (g.form == 0 && g.bgzf && g.procs > 1) {
         /* This is a BGZF gzip file, decompress all blocks in parallel until the form changes */
         setup_jobs();
-        /* start write thread */
-        writeth = launch(write_thread, NULL);
+        if (g.decode == 1) {
+            /* start write thread */
+            writeth = launch(write_thread, NULL);
+        }
         
         seq = 0;
         job = NULL;
@@ -3244,6 +3258,12 @@ local void infchk(void)
             assert(input->len == 0);
             job->in = input;
             job->out = NULL;
+            job->more = 1;
+            job->seq = seq;
+            Trace(("-- read #%ld%s", ""));
+            if (++seq < 1) {
+                bail("input too long: ", g.inf);
+            }
 
             /* read block_len from g.in_next, modify g.in_left */
             /* instead of reading directly: job->in->len += readn(g.ind, job->in->buf, block_len); */
@@ -3264,14 +3284,8 @@ local void infchk(void)
             if (input->len != (size_t) g.bgzf_bsize) {
                 bail("incomplete BGZF gzip -- reached eof", "");
             }
-            job->more = 1;
-
+ 
             /* preparation of job is complete */
-            job->seq = seq;
-            Trace(("-- read #%ld%s", ""));
-            if (++seq < 1) {
-                bail("input too long: ", g.inf);
-            }
             
             /* start another uncompress thread if needed */
             if ((unsigned long) cthreads < seq && cthreads < g.procs) {
@@ -3295,10 +3309,12 @@ local void infchk(void)
             
         } while (was == 0 && ret == 8 && g.form == 0 && g.bgzf && g.bgzf_bsize);
         
-        /* wait for the write thread to complete (we leave the compress threads out
-         there and waiting in case there is another stream to compress) */
-        join(writeth);
-        writeth = NULL;
+        if (g.decode == 1) {
+            /* wait for the write thread to complete (we leave the compress threads out
+             there and waiting in case there is another stream to compress) */
+            join(writeth);
+            writeth = NULL;
+        }
         
         if ( ret != 8 ) {
             return;
