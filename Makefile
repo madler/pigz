@@ -62,6 +62,9 @@ test: pigz
 	  echo 'compress -f < pigz.c | ./unpigz | cmp - pigz.c' ;\
 	  compress -f < pigz.c | ./unpigz | cmp - pigz.c ;\
 	fi
+	./pigz -kfB pigz.c \
+	&& ./pigz -d -c -p 1 pigz.c.gz | diff -q - pigz.c \
+	&& ./pigz -d -c -p 2 pigz.c.gz | diff -q - pigz.c
 	@rm -f pigz.c.gz pigz.c.zz pigz.c.zip
 
 tests: dev test

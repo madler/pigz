@@ -1527,11 +1527,10 @@ local void uncompress_thread(void *dummy)
 
     /* keep looking for work */
     for (;;) {
-        assert(g.form == 0 && g.bgzf); /* this must be BGZF */
         
         /* acquire and allocate output buffer */
         out = get_space(&out_pool);
-        while( out->size < BGZF_FOOTER_SIZE) {
+        while( out->size < BGZF_MAX_BLOCK_SIZE) {
             grow_space(out);
         }
         out->len = 0;
@@ -1543,15 +1542,14 @@ local void uncompress_thread(void *dummy)
         assert(job != NULL);
         if (job->seq == -1)
             break;
+        
         compress_head = job->next;
         if (job->next == NULL)
         compress_tail = &compress_head;
         twist(compress_have, BY, -1);
         
         /* get output buffer space */
-        if (job->out != NULL) {
-            drop_space(job->out);
-        }
+        assert(job->out == NULL);
         job->out = out;
         
         assert(job->in != NULL && job->in->len > BGZF_FOOTER_SIZE);
@@ -1581,16 +1579,16 @@ local void uncompress_thread(void *dummy)
         }
 
         /* compute and record uncompressed data length */
-        len = strm.total_out;
+        len = strm.next_out - out->buf;
         out->len = len;
         incheck = 0;
-        for(i=0; i<3;i++) {
-            incheck += *(out->buf + len + i) << 8*i;
-        }
+        for(i=0; i<4;i++) {
+            incheck += (unsigned) *(strm.next_in++) << (8*i);        }
         inlen = 0;
-        for(i=0; i<3; i++) {
-            inlen += *(out->buf + len + 4 + i) << 8*i;
-        }
+        for(i=0; i<4; i++) {
+            inlen += (unsigned) *(strm.next_in++) << (8*i);        }
+        strm.avail_in -= 8;
+        assert(strm.avail_in == 0);
         
         /* compute uncompressed data check */
         check = CHECK(0L, Z_NULL, 0);
@@ -1599,7 +1597,7 @@ local void uncompress_thread(void *dummy)
         /* read and check trailer */
         /* gzip trailer */
         if (check != incheck || len != inlen) {
-            complain("Calculated %d check and %d length, but got %d and %d in the footer\n", check, len, incheck, inlen);
+            complain("Calculated %lu check and %lu length, but got %lu and %lu in the footer\n", check, len, incheck, inlen);
             bail("corrupted input checksum or length in BGZF block", g.inf);
         }
 
@@ -1620,9 +1618,9 @@ local void uncompress_thread(void *dummy)
         bail("corrupted input -- inflateEnd failed in BGZF block", g.inf);
     }
 
-    
     /* found job with seq == -1 -- free deflate memory and return to join */
     release(compress_have);
+    drop_space(out);
 }
 
 /* get the next compression job from the head of the list, compress and compute
@@ -3209,13 +3207,14 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
    read and check the gzip, zlib, or zip trailer */
 local void infchk(void)
 {
-    int ret, cont, was;
+    int ret, cont, was, count;
     unsigned long check, len, seq, block_len;
     z_stream strm;
     unsigned tmp2;
     unsigned long tmp4;
     off_t clen;
     struct job *job;
+    struct space *input;
 
     cont = 0;
     assert(g.decode);
@@ -3237,16 +3236,36 @@ local void infchk(void)
                 bail("not enough memory", "");
             }
             job->calc = NULL; // no calc lock in decode
+            job->lens = NULL;
+            job->next = NULL;
             
             /* update input spaces */
             block_len = g.bgzf_bsize;
-            job->in = get_space(&in_pool);
-            job->in->len = 0;
-            while (job->in->size < block_len) {
-                grow_space(job->in);
+            input = get_space(&in_pool);
+            while (input->size < block_len) {
+                grow_space(input);
             }
-            job->in->len += readn(g.ind, job->in->buf, block_len);
-            if (job->in->len != (size_t) g.bgzf_bsize) {
+            assert(input->len == 0);
+            job->in = input;
+            job->out = NULL;
+
+            /* read block_len from g.in_next, modify g.in_left */
+            /* instead of reading directly: job->in->len += readn(g.ind, job->in->buf, block_len); */
+            while (block_len) {
+                count = block_len > g.in_left ? g.in_left : block_len;
+                memcpy(input->buf + input->len, g.in_next, count);
+                g.in_next += count;
+                g.in_left -= count;
+                input->len += count;
+                block_len -= count;
+                if (g.in_left == 0) {
+                    load();
+                    if (g.in_left == 0) {
+                        break;                    }
+                }
+            }
+            
+            if (input->len != (size_t) g.bgzf_bsize) {
                 bail("incomplete BGZF gzip -- reached eof", "");
             }
             job->more = 1;
@@ -3254,8 +3273,9 @@ local void infchk(void)
             /* preparation of job is complete */
             job->seq = seq;
             Trace(("-- read #%ld%s", ""));
-            if (++seq < 1)
-            bail("input too long: ", g.inf);
+            if (++seq < 1) {
+                bail("input too long: ", g.inf);
+            }
             
             /* start another uncompress thread if needed */
             if ((unsigned long) cthreads < seq && cthreads < g.procs) {
@@ -3283,6 +3303,7 @@ local void infchk(void)
          there and waiting in case there is another stream to compress) */
         join(writeth);
         writeth = NULL;
+        
         if ( ret != 8 ) {
             return;
         }
