@@ -295,10 +295,14 @@
    buffers is not directly limited, but is indirectly limited by the release of
    input buffers to about the same number.
  
-   TODO add BGZF Block Compress description and settings.
-     FNAME only in first
-     checksum may needs to be tied to block, not rolling
-     blocksize needs to be 65280 to ensure header + compressed + trailer < 65k
+   Added support for the BGZF Blocked GNU Zip Format extension to gzip that enables
+   parallel decompression as well as random access to the uncompressed contents
+   of a gzip archive. The BGZF specification is described in the SAM format 
+   specification:  http://samtools.github.io/hts-specs/SAMv1.pdf
+   Where the uncompressed data is compressed in blocks of up to 65280 bytes with a
+   gzip header and trailer.  Each block can be decompressed independently and
+   if the file is indexed by block boundaries, randomly accessed.
+ 
  */
 
 /* use large file functions if available */
@@ -1563,8 +1567,6 @@ local void uncompress_thread(void *dummy)
         strm.next_out = out->buf;
         strm.avail_out = out->size;
 
-        fprintf(stderr, "initialzed new bgzf block\n");
-        
         ret = inflate(&strm, Z_FINISH);
         if (ret != Z_STREAM_END) {
             bail("corrupted input -- invalid BGZF deflate data: ", g.inf);
@@ -2432,7 +2434,6 @@ local void load_read(void *dummy)
         possess(g.load_state);
         wait_for(g.load_state, TO_BE, 1);
         g.in_len = len = readn(g.ind, g.in_which ? g.in_buf : g.in_buf2, BUF);
-        fprintf(stderr, "load_read read %zu using %d\n", g.in_len, g.in_which);
         Trace(("-- decompress read thread read %lu bytes", len));
         twist(g.load_state, TO, 0);
     } while (len == BUF);
@@ -2464,7 +2465,6 @@ local size_t load(void)
             g.load_state = new_lock(1);
             g.load_thread = launch(load_read, NULL);
         }
-        fprintf(stderr, "about to read from buffer %d\n", BUF);
         /* wait for the previously requested read to complete */
         possess(g.load_state);
         wait_for(g.load_state, TO_BE, 0);
@@ -2473,7 +2473,6 @@ local size_t load(void)
         /* set up input buffer with the data just read */
         g.in_next = g.in_which ? g.in_buf : g.in_buf2;
         g.in_left = g.in_len;
-        fprintf(stderr, "read %zu from thread using %d\n", g.in_left, g.in_which);
 
         /* if not at end of file, alert read thread to load next buffer,
            alternate between g.in_buf and g.in_buf2 */
@@ -2495,7 +2494,6 @@ local size_t load(void)
     {
         /* don't use threads -- simply read a buffer into g.in_buf */
         g.in_left = readn(g.ind, g.in_next = g.in_buf, BUF);
-        fprintf(stderr, "read no thread %zu of %d\n", g.in_left, BUF);
     }
 
     /* note end of file */
@@ -2753,7 +2751,6 @@ local int get_header(int save)
                 /* read the BGZF block size value */
                 g.bgzf = 1;
                 g.bgzf_bsize = GET2();
-                fprintf(stderr, "Found bgzf size %d\n", g.bgzf_bsize);
             } else {
                 SKIP(field_len);
             }
@@ -2817,7 +2814,6 @@ local int get_header(int save)
         assert(count >= BGZF_HEADER_SIZE);
         g.bgzf_bsize = g.bgzf_bsize - count + 1;
     }
-    fprintf(stderr, "get_header: count: %d bgzf: %d\n", count, g.bgzf_bsize);
     /* return gzip compression method */
     g.form = 0;
     return method;
@@ -3321,8 +3317,7 @@ local void infchk(void)
         strm.opaque = OPAQUE;
         ret = inflateBackInit(&strm, 15, out_buf);
         if (ret != Z_OK)
-        bail("not enough memory", "");
-        fprintf(stderr, "initialzed new block\n");
+            bail("not enough memory", "");
         
         /* decompress, compute lengths and check value */
         strm.avail_in = g.in_left;
@@ -3399,7 +3394,6 @@ local void infchk(void)
                 bail("corrupted gzip stream -- crc32 mismatch: ", g.inf);
             if (len != (g.out_tot & LOW32))
                 bail("corrupted gzip stream -- length mismatch: ", g.inf);
-            fprintf(stderr, "got trailer check %lu, ulen: %lu\n", check, len);
         }
 
         /* show file information if requested */
