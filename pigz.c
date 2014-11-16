@@ -2742,7 +2742,7 @@ local int get_header(int save)
         extra = GET2();
         if (g.in_eof)
             return -3;
-        // parse extra field(s) look for BC && set g.bgzf to bsize, if present
+        // parse extra field(s) look for BC && set g.bgzf_bsize, if present
         count = extra;
         g.bgzf_bsize = 0;
         while (count > 0) {
@@ -2809,10 +2809,10 @@ local int get_header(int save)
     }
 
     if (g.bgzf && g.bgzf_bsize) {
-        // subtract for header bytes already read, but include trailer bytes at the end...
+        // subtract header bytes already read, but include trailer bytes at the end...
         assert(g.bgzf_bsize > count + BGZF_FOOTER_SIZE - 1);
         assert(count >= BGZF_HEADER_SIZE);
-        g.bgzf_bsize = g.bgzf_bsize - count + 1;
+        g.bgzf_bsize = g.bgzf_bsize - count + 1; // add 1 (see BGZF specification)
     }
     /* return gzip compression method */
     g.form = 0;
