@@ -1551,10 +1551,10 @@ local void uncompress_thread(void *dummy)
             job = NULL;
             break;
         }
-        
         compress_head = job->next;
-        if (job->next == NULL)
-        compress_tail = &compress_head;
+        if (job->next == NULL) {
+            compress_tail = &compress_head;
+        }
         twist(compress_have, BY, -1);
         
         /* get output buffer space */
@@ -1590,10 +1590,12 @@ local void uncompress_thread(void *dummy)
         out->len = len;
         incheck = 0;
         for(i=0; i<4;i++) {
-            incheck += (unsigned) *(strm.next_in++) << (8*i);        }
+            incheck += (unsigned) *(strm.next_in++) << (8*i);
+        }
         inlen = 0;
         for(i=0; i<4; i++) {
-            inlen += (unsigned) *(strm.next_in++) << (8*i);        }
+            inlen += (unsigned) *(strm.next_in++) << (8*i);
+        }
         strm.avail_in -= 8;
         assert(strm.avail_in == 0);
         
