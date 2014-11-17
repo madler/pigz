@@ -2747,8 +2747,11 @@ local int get_header(int save)
     else
         SKIP(4);
 
-    /* skip extra field and OS */
+    /* skip extra flags and OS */
     SKIP(2);
+
+    if (g.in_eof)
+        return -3;
 
     /* parse extra field, if present */
     g.bgzf = g.bgzf_bsize = extra = 0; /* assume it is NOT BGZF */
@@ -2761,6 +2764,8 @@ local int get_header(int save)
         g.bgzf_bsize = 0;
         while (count > 0) {
             c1 = GET(); c2 = GET(); field_len = GET2();
+            if (g.in_eof)
+                return -3;
             if (c1 == 'B' && c2 == 'C' && field_len == 2) {
                 /* read the BGZF block size value */
                 g.bgzf = 1;
@@ -2768,6 +2773,8 @@ local int get_header(int save)
             } else {
                 SKIP(field_len);
             }
+            if (g.in_eof)
+                return -3;
             count -= 4 + field_len;
         }
     }
@@ -2821,6 +2828,9 @@ local int get_header(int save)
         SKIP(2);
         count += 2;
     }
+
+    if (g.in_eof)
+        return -3;
 
     if (g.bgzf && g.bgzf_bsize) {
         // subtract header bytes already read, but include trailer bytes at the end...
