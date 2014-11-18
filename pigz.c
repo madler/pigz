@@ -892,12 +892,12 @@ local unsigned long time2dos(time_t t)
 #define PUT4M(a,b) (*(a)=(b)>>24,(a)[1]=(b)>>16,(a)[2]=(b)>>8,(a)[3]=(b))
 
 /* write a gzip, zlib, or zip header using the information in the globals */
-local unsigned long put_header(void)
+/* compressedLen is ignored unless this is a BGZF formated gzip */
+local unsigned long put_header(long compressedLen)
 {
     unsigned long len;
     unsigned char head[30];
     unsigned int bsize; /* for bgzf */
-
     if (g.form > 1) {               /* zip */
         /* write local header */
         PUT4L(head, 0x04034b50UL);  /* local header signature */
@@ -947,36 +947,48 @@ local unsigned long put_header(void)
         PUT4L(head + 4, g.mtime);
         head[8] = g.level >= 9 ? 2 : (g.level == 1 ? 4 : 0);
         head[9] = 3;                /* unix */
+        
         if (g.bgzf) {
+            assert(compressedLen > 0);
+            
             head[3] |= 4;               /* include FEXTRA */
-            head[9] = 255;              /* unknown */
             PUT2L(head+10, 6);          /* 6 byte XLEN */
             head[12] = 'B';             /* BC tag */
             head[13] = 'C';
             PUT2L(head+14, 2);          /* 2 byte BSIZE field */
-            len = 16;
-            writen(g.outd, head, len);
-            /* Leave 2 bytes (uint16_t) BSIZE unwritten for now */
-
-            if (g.name) {  /* write a special no contents block to include the FNAME field */
-
-                /* write 2-byte BSIZE entry now */
-                bsize = len+2 + strlen(g.name)+1 + 2 + BGZF_FOOTER_SIZE - 1;
-                PUT2L(head+len, bsize);
-                writen(g.outd, head+len, 2);
-                len += 2;
-
-                /* write name */
+           
+            /* calculate BGZF bsize.  Account for FNAME field, but FCOMMENT and FHCRC are never included */
+            bsize = BGZF_HEADER_SIZE + (g.name == NULL ? 0 : strlen(g.name) + 1) + compressedLen + BGZF_FOOTER_SIZE - 1;
+            
+            if (bsize >= BGZF_MAX_BLOCK_SIZE - 1) {
+                assert(g.name != NULL);
+                /* Including name field will exceed the capacity of the BGZF block.
+                 * write name now, then empty deflate stream then trailer followed by a new header
+                 */
+                bsize = BGZF_HEADER_SIZE + (g.name == NULL ? 0 : strlen(g.name) + 1) + 2 + BGZF_FOOTER_SIZE - 1;
+                PUT2L(head+16, (uint16_t) (bsize));
+                writen(g.outd, head, BGZF_HEADER_SIZE);
                 writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
-
-                /* empty zero-length Z_FINISH-ed compressed stream */
-                head[len] = 3; head[len+1] = 0;
-                write(g.outd, head+len, 2);
-
-                /* add the name size+1 */
-                len += strlen(g.name) + 1;
-                g.name = NULL; /* but do not write the name ever again! */
+                g.name = NULL; /* do not include name again */
+                /* empty deflate Z_FINISH-ed deflate stream (2 bytes 3, 0 */
+                head[16] = 3;
+                head[17] = 0;
+                /* 0 check and 0 uncompressed length */
+                head[18] = head[19] = head[20] = head[21] = 0; /* trailer check */
+                head[22] = head[23] = head[24] = head[25] = 0; /* trailer ulen */
+                writen(g.outd, head+16, 2+4+4);
+                return put_header(compressedLen);
             }
+            
+            assert( bsize > BGZF_HEADER_SIZE + BGZF_FOOTER_SIZE && bsize < BGZF_MAX_BLOCK_SIZE );
+            assert( (head[3] & 2) == 0 && (head[3] & 16) == 0);
+            
+            /* write 2-byte BSIZE field */
+            PUT2L(head+16, (uint16_t) (bsize));
+            
+            len = 18;
+            writen(g.outd, head, len);
+            
         } else {
             writen(g.outd, head, 10);
             len = 10;
@@ -984,6 +996,9 @@ local unsigned long put_header(void)
         if (g.name != NULL) {
             writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
             len += strlen(g.name) + 1;
+            if (g.bgzf) {
+                g.name = NULL; /* do not write this name again for BGZF */
+            }
         }
     }
     return len;
@@ -1070,19 +1085,16 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
 local void put_bgzf_trailer_and_header(unsigned long *ulen, unsigned long *clen,
                                        unsigned long *check, unsigned long *head)
 {
-    unsigned char bsize_buf[2];
-    /* finish this block */
-    put_trailer(*ulen, *clen, *check, *head);
-
+    assert( g.bgzf );
+    if (*head > 0) {
+        /* finish this block */
+        put_trailer(*ulen, *clen, *check, *head);
+    } // else this is the first block header...
+    
     /* write new header for new block */
-    *head = put_header();
+    *head = put_header(*clen);
 
-    /* write 2-byte BSIZE field */
-    *head += 2;
-    assert( *head >= BGZF_HEADER_SIZE );
-    assert( *clen + *head + BGZF_FOOTER_SIZE <= BGZF_BLOCK_SIZE );
-    PUT2L(bsize_buf, (uint16_t) (*clen + *head + BGZF_FOOTER_SIZE - 1));
-    writen(g.outd, bsize_buf, 2);
+    assert( *clen + *head + BGZF_FOOTER_SIZE <= BGZF_MAX_BLOCK_SIZE );
 
     /* reset counting */
     *ulen = *clen = 0;
@@ -1881,7 +1893,12 @@ local void write_thread(void *dummy)
     /* build and write header */
     Trace(("-- write thread running"));
     if (!g.decode) {
-        head = put_header();
+        if (g.bgzf) {
+            // BGZF will write header just in time.
+            head = 0;
+        } else {
+            head = put_header(0);
+        }
     }
     /* process output of compress threads until end of input */
     ulen = clen = 0;
@@ -1934,6 +1951,9 @@ local void write_thread(void *dummy)
 
     if (!g.decode) {
         /* write trailer */
+        if (head == 0) {
+            head = put_header(0);
+        }
         put_trailer(ulen, clen, check, head);
         if (g.bgzf) {
             /* write the final trailing EOF block */
@@ -2238,7 +2258,12 @@ local void single_compress(int reset)
     }
 
     /* write header */
-    head = put_header();
+    if (g.bgzf) {
+        // BGZF will write header just in time
+        head = 0;
+    } else {
+        head = put_header(0);
+    }
 
     /* set compression level in case it changed */
     if (g.level <= 9) {
@@ -2423,14 +2448,17 @@ local void single_compress(int reset)
     } while (more || got);
 
     /* write trailer */
+    if (head == 0) {
+        head = put_header(0);
+    }
+    
     if (g.bgzf) {
-        /* write the final trailing EOF block */
+        /* write the final BGZF EOF block */
         put_trailer(last_ulen, clen, last_check, head);
         writen(g.outd, (unsigned char*) bgzf_eof, 28);
     } else {
         put_trailer(ulen, clen, check, head);
     }
-
 }
 
 /* --- decompression --- */
