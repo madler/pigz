@@ -363,8 +363,9 @@
                         /* lock, new_lock(), possess(), twist(), wait_for(),
                            release(), peek_lock(), free_lock(), yarn_name */
 #endif
-#include "zopfli/deflate.h"     /* ZopfliDeflatePart(), ZopfliInitOptions(),
-                                   ZopfliOptions */
+#include "zopfli/src/zopfli/deflate.h"  /* ZopfliDeflatePart(),
+                                           ZopfliInitOptions(),
+                                           ZopfliOptions */
 
 /* for local functions and globals */
 #define local static

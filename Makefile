@@ -1,37 +1,38 @@
 CC=cc
 CFLAGS=-O3 -Wall -Wextra
 LDFLAGS=-lz
+ZOPFLI=zopfli/src/zopfli/
 # use gcc and gmake on Solaris
 
-pigz: pigz.o yarn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
+pigz: pigz.o yarn.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lm
 	ln -f pigz unpigz
 
-pigz.o: pigz.c yarn.h zopfli/deflate.h zopfli/util.h
+pigz.o: pigz.c yarn.h ${ZOPFLI}deflate.h ${ZOPFLI}util.h
 
 yarn.o: yarn.c yarn.h
 
-zopfli/deflate.o: zopfli/deflate.c zopfli/deflate.h zopfli/blocksplitter.h zopfli/lz77.h zopfli/squeeze.h zopfli/tree.h zopfli/zopfli.h zopfli/cache.h zopfli/hash.h zopfli/util.h
+${ZOPFLI}deflate.o: ${ZOPFLI}deflate.c ${ZOPFLI}deflate.h ${ZOPFLI}blocksplitter.h ${ZOPFLI}lz77.h ${ZOPFLI}squeeze.h ${ZOPFLI}tree.h ${ZOPFLI}zopfli.h ${ZOPFLI}cache.h ${ZOPFLI}hash.h ${ZOPFLI}util.h
 
-zopfli/blocksplitter.o: zopfli/blocksplitter.c zopfli/blocksplitter.h zopfli/deflate.h zopfli/lz77.h zopfli/squeeze.h zopfli/tree.h zopfli/util.h zopfli/zopfli.h zopfli/cache.h zopfli/hash.h
+${ZOPFLI}blocksplitter.o: ${ZOPFLI}blocksplitter.c ${ZOPFLI}blocksplitter.h ${ZOPFLI}deflate.h ${ZOPFLI}lz77.h ${ZOPFLI}squeeze.h ${ZOPFLI}tree.h ${ZOPFLI}util.h ${ZOPFLI}zopfli.h ${ZOPFLI}cache.h ${ZOPFLI}hash.h
 
-zopfli/tree.o: zopfli/tree.c zopfli/tree.h zopfli/katajainen.h zopfli/util.h
+${ZOPFLI}tree.o: ${ZOPFLI}tree.c ${ZOPFLI}tree.h ${ZOPFLI}katajainen.h ${ZOPFLI}util.h
 
-zopfli/lz77.o: zopfli/lz77.h zopfli/util.h zopfli/cache.h zopfli/hash.h zopfli/zopfli.h
+${ZOPFLI}lz77.o: ${ZOPFLI}lz77.h ${ZOPFLI}util.h ${ZOPFLI}cache.h ${ZOPFLI}hash.h ${ZOPFLI}zopfli.h
 
-zopfli/cache.o: zopfli/cache.c zopfli/cache.h zopfli/util.h
+${ZOPFLI}cache.o: ${ZOPFLI}cache.c ${ZOPFLI}cache.h ${ZOPFLI}util.h
 
-zopfli/hash.o: zopfli/hash.c zopfli/hash.h zopfli/util.h
+${ZOPFLI}hash.o: ${ZOPFLI}hash.c ${ZOPFLI}hash.h ${ZOPFLI}util.h
 
-zopfli/util.o: zopfli/util.c zopfli/util.h
+${ZOPFLI}util.o: ${ZOPFLI}util.c ${ZOPFLI}util.h
 
-zopfli/squeeze.o: zopfli/squeeze.c zopfli/squeeze.h zopfli/blocksplitter.h zopfli/deflate.h zopfli/tree.h zopfli/util.h zopfli/zopfli.h zopfli/lz77.h zopfli/cache.h zopfli/hash.h
+${ZOPFLI}squeeze.o: ${ZOPFLI}squeeze.c ${ZOPFLI}squeeze.h ${ZOPFLI}blocksplitter.h ${ZOPFLI}deflate.h ${ZOPFLI}tree.h ${ZOPFLI}util.h ${ZOPFLI}zopfli.h ${ZOPFLI}lz77.h ${ZOPFLI}cache.h ${ZOPFLI}hash.h
 
-zopfli/katajainen.o: zopfli/katajainen.c zopfli/katajainen.h
+${ZOPFLI}katajainen.o: ${ZOPFLI}katajainen.c ${ZOPFLI}katajainen.h
 
 dev: pigz pigzt pigzn
 
-pigzt: pigzt.o yarnt.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
+pigzt: pigzt.o yarnt.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigzt $^ -lpthread -lm
 
 pigzt.o: pigz.c yarn.h
@@ -40,7 +41,7 @@ pigzt.o: pigz.c yarn.h
 yarnt.o: yarn.c yarn.h
 	$(CC) $(CFLAGS) -DDEBUG -g -c -o yarnt.o yarn.c
 
-pigzn: pigzn.o zopfli/deflate.o zopfli/blocksplitter.o zopfli/tree.o zopfli/lz77.o zopfli/cache.o zopfli/hash.o zopfli/util.o zopfli/squeeze.o zopfli/katajainen.o
+pigzn: pigzn.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigzn $^ -lm
 
 pigzn.o: pigz.c
@@ -75,4 +76,4 @@ pigz.pdf: pigz.1
 	groff -mandoc -f H -T ps pigz.1 | ps2pdf - pigz.pdf
 
 clean:
-	@rm -f *.o zopfli/*.o pigz unpigz pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
+	@rm -f *.o ${ZOPFLI}*.o pigz unpigz pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
