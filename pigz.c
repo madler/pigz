@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007-2014 Mark Adler
- * Version 2.3.2  xx Jan 2014  Mark Adler
+ * Copyright (C) 2007-2015 Mark Adler
+ * Version 2.3.2  xx Jan 2015  Mark Adler
  */
 
 /*
@@ -162,7 +162,7 @@
                        Update zopfli to Mar 10, 2013 Google state
                        Support zopfli in single thread case
                        Add -F, -I, -M, and -O options for zopfli tuning
-   2.3.2  xx Jan 2014  -
+   2.3.2  xx Jan 2015  -
  */
 
 #define VERSION "pigz 2.3.2\n"
