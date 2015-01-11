@@ -17,11 +17,6 @@ Author: lode.vandevenne@gmail.com (Lode Vandevenne)
 Author: jyrki.alakuijala@gmail.com (Jyrki Alakuijala)
 */
 
-/*
-Modified by madler@alumni.caltech.edu (Mark Adler)
-Moved ZopfliInitOptions() from zopfli_lib.c.
-*/
-
 #include "deflate.h"
 
 #include <assert.h>
@@ -33,19 +28,18 @@ Moved ZopfliInitOptions() from zopfli_lib.c.
 #include "squeeze.h"
 #include "tree.h"
 
-void ZopfliInitOptions(ZopfliOptions* options) {
-    options->verbose = 0;
-    options->numiterations = 15;
-    options->blocksplitting = 1;
-    options->blocksplittinglast = 0;
-    options->blocksplittingmax = 15;
-}
-
+/*
+bp = bitpointer, always in range [0, 7].
+The outsize is number of necessary bytes to encode the bits.
+Given the value of bp and the amount of bytes, the amount of bits represented
+is not simply bytesize * 8 + bp because even representing one bit requires a
+whole byte. It is: (bp == 0) ? (bytesize * 8) : ((bytesize - 1) * 8 + bp)
+*/
 static void AddBit(int bit,
                    unsigned char* bp, unsigned char** out, size_t* outsize) {
-  if (((*bp) & 7) == 0) ZOPFLI_APPEND_DATA(0, out, outsize);
-  (*out)[*outsize - 1] |= bit << ((*bp) & 7);
-  (*bp)++;
+  if (*bp == 0) ZOPFLI_APPEND_DATA(0, out, outsize);
+  (*out)[*outsize - 1] |= bit << *bp;
+  *bp = (*bp + 1) & 7;
 }
 
 static void AddBits(unsigned symbol, unsigned length,
@@ -54,9 +48,9 @@ static void AddBits(unsigned symbol, unsigned length,
   unsigned i;
   for (i = 0; i < length; i++) {
     unsigned bit = (symbol >> i) & 1;
-    if (((*bp) & 7) == 0) ZOPFLI_APPEND_DATA(0, out, outsize);
-    (*out)[*outsize - 1] |= bit << ((*bp) & 7);
-    (*bp)++;
+    if (*bp == 0) ZOPFLI_APPEND_DATA(0, out, outsize);
+    (*out)[*outsize - 1] |= bit << *bp;
+    *bp = (*bp + 1) & 7;
   }
 }
 
@@ -71,9 +65,9 @@ static void AddHuffmanBits(unsigned symbol, unsigned length,
   unsigned i;
   for (i = 0; i < length; i++) {
     unsigned bit = (symbol >> (length - i - 1)) & 1;
-    if (((*bp) & 7) == 0) ZOPFLI_APPEND_DATA(0, out, outsize);
-    (*out)[*outsize - 1] |= bit << ((*bp) & 7);
-    (*bp)++;
+    if (*bp == 0) ZOPFLI_APPEND_DATA(0, out, outsize);
+    (*out)[*outsize - 1] |= bit << *bp;
+    *bp = (*bp + 1) & 7;
   }
 }
 
@@ -104,141 +98,195 @@ static void PatchDistanceCodesForBuggyDecoders(unsigned* d_lengths) {
   }
 }
 
-static void AddDynamicTree(const unsigned* ll_lengths,
-                           const unsigned* d_lengths,
-                           unsigned char* bp,
-                           unsigned char** out, size_t* outsize) {
-  unsigned* lld_lengths = 0;  /* All litlen and dist lengthts with ending zeros
-      trimmed together in one array. */
-  unsigned lld_total;  /* Size of lld_lengths. */
-  unsigned* rle = 0;  /* Runlength encoded version of lengths of litlen and dist
-      trees. */
+/*
+Encodes the Huffman tree and returns how many bits its encoding takes. If out
+is a null pointer, only returns the size and runs faster.
+*/
+static size_t EncodeTree(const unsigned* ll_lengths,
+                         const unsigned* d_lengths,
+                         int use_16, int use_17, int use_18,
+                         unsigned char* bp,
+                         unsigned char** out, size_t* outsize) {
+  unsigned lld_total;  /* Total amount of literal, length, distance codes. */
+  /* Runlength encoded version of lengths of litlen and dist trees. */
+  unsigned* rle = 0;
   unsigned* rle_bits = 0;  /* Extra bits for rle values 16, 17 and 18. */
   size_t rle_size = 0;  /* Size of rle array. */
   size_t rle_bits_size = 0;  /* Should have same value as rle_size. */
-  unsigned hlit = 29; /* 286 - 257 */
+  unsigned hlit = 29;  /* 286 - 257 */
   unsigned hdist = 29;  /* 32 - 1, but gzip does not like hdist > 29.*/
   unsigned hclen;
+  unsigned hlit2;
   size_t i, j;
   size_t clcounts[19];
   unsigned clcl[19];  /* Code length code lengths. */
   unsigned clsymbols[19];
   /* The order in which code length code lengths are encoded as per deflate. */
-  unsigned order[19] = {
+  static const unsigned order[19] = {
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
   };
+  int size_only = !out;
+  size_t result_size = 0;
+
+  for(i = 0; i < 19; i++) clcounts[i] = 0;
 
   /* Trim zeros. */
   while (hlit > 0 && ll_lengths[257 + hlit - 1] == 0) hlit--;
   while (hdist > 0 && d_lengths[1 + hdist - 1] == 0) hdist--;
+  hlit2 = hlit + 257;
 
-  lld_total = hlit + 257 + hdist + 1;
-  lld_lengths = (unsigned*)malloc(sizeof(*lld_lengths) * lld_total);
-  if (!lld_lengths) exit(-1); /* Allocation failed. */
-
-  for (i = 0; i < lld_total; i++) {
-    lld_lengths[i] = i < 257 + hlit
-        ? ll_lengths[i] : d_lengths[i - 257 - hlit];
-    assert(lld_lengths[i] < 16);
-  }
+  lld_total = hlit2 + hdist + 1;
 
   for (i = 0; i < lld_total; i++) {
-    size_t count = 0;
-    for (j = i; j < lld_total && lld_lengths[i] == lld_lengths[j]; j++) {
-      count++;
+    /* This is an encoding of a huffman tree, so now the length is a symbol */
+    unsigned char symbol = i < hlit2 ? ll_lengths[i] : d_lengths[i - hlit2];
+    unsigned count = 1;
+    if(use_16 || (symbol == 0 && (use_17 || use_18))) {
+      for (j = i + 1; j < lld_total && symbol ==
+          (j < hlit2 ? ll_lengths[j] : d_lengths[j - hlit2]); j++) {
+        count++;
+      }
     }
-    if (count >= 4 || (count >= 3 && lld_lengths[i] == 0)) {
-      if (lld_lengths[i] == 0) {
-        if (count > 10) {
-          if (count > 138) count = 138;
-          ZOPFLI_APPEND_DATA(18, &rle, &rle_size);
-          ZOPFLI_APPEND_DATA(count - 11, &rle_bits, &rle_bits_size);
-        } else {
-          ZOPFLI_APPEND_DATA(17, &rle, &rle_size);
-          ZOPFLI_APPEND_DATA(count - 3, &rle_bits, &rle_bits_size);
-        }
-      } else {
-        unsigned repeat = count - 1;  /* Since the first one is hardcoded. */
-        ZOPFLI_APPEND_DATA(lld_lengths[i], &rle, &rle_size);
-        ZOPFLI_APPEND_DATA(0, &rle_bits, &rle_bits_size);
-        while (repeat >= 6) {
-          ZOPFLI_APPEND_DATA(16, &rle, &rle_size);
-          ZOPFLI_APPEND_DATA(6 - 3, &rle_bits, &rle_bits_size);
-          repeat -= 6;
-        }
-        if (repeat >= 3) {
-          ZOPFLI_APPEND_DATA(16, &rle, &rle_size);
-          ZOPFLI_APPEND_DATA(3 - 3, &rle_bits, &rle_bits_size);
-          repeat -= 3;
-        }
-        while (repeat != 0) {
-          ZOPFLI_APPEND_DATA(lld_lengths[i], &rle, &rle_size);
-          ZOPFLI_APPEND_DATA(0, &rle_bits, &rle_bits_size);
-          repeat--;
+    i += count - 1;
+
+    /* Repetitions of zeroes */
+    if (symbol == 0 && count >= 3) {
+      if (use_18) {
+        while (count >= 11) {
+          unsigned count2 = count > 138 ? 138 : count;
+          if (!size_only) {
+            ZOPFLI_APPEND_DATA(18, &rle, &rle_size);
+            ZOPFLI_APPEND_DATA(count2 - 11, &rle_bits, &rle_bits_size);
+          }
+          clcounts[18]++;
+          count -= count2;
         }
       }
-
-      i += count - 1;
-    } else {
-      ZOPFLI_APPEND_DATA(lld_lengths[i], &rle, &rle_size);
-      ZOPFLI_APPEND_DATA(0, &rle_bits, &rle_bits_size);
+      if (use_17) {
+        while (count >= 3) {
+          unsigned count2 = count > 10 ? 10 : count;
+          if (!size_only) {
+            ZOPFLI_APPEND_DATA(17, &rle, &rle_size);
+            ZOPFLI_APPEND_DATA(count2 - 3, &rle_bits, &rle_bits_size);
+          }
+          clcounts[17]++;
+          count -= count2;
+        }
+      }
     }
-    assert(rle[rle_size - 1] <= 18);
-  }
 
-  for (i = 0; i < 19; i++) {
-    clcounts[i] = 0;
-  }
-  for (i = 0; i < rle_size; i++) {
-    clcounts[rle[i]]++;
+    /* Repetitions of any symbol */
+    if (use_16 && count >= 4) {
+      count--;  /* Since the first one is hardcoded. */
+      clcounts[symbol]++;
+      if (!size_only) {
+        ZOPFLI_APPEND_DATA(symbol, &rle, &rle_size);
+        ZOPFLI_APPEND_DATA(0, &rle_bits, &rle_bits_size);
+      }
+      while (count >= 3) {
+        unsigned count2 = count > 6 ? 6 : count;
+        if (!size_only) {
+          ZOPFLI_APPEND_DATA(16, &rle, &rle_size);
+          ZOPFLI_APPEND_DATA(count2 - 3, &rle_bits, &rle_bits_size);
+        }
+        clcounts[16]++;
+        count -= count2;
+      }
+    }
+
+    /* No or insufficient repetition */
+    clcounts[symbol] += count;
+    while (count > 0) {
+      if (!size_only) {
+        ZOPFLI_APPEND_DATA(symbol, &rle, &rle_size);
+        ZOPFLI_APPEND_DATA(0, &rle_bits, &rle_bits_size);
+      }
+      count--;
+    }
   }
 
   ZopfliCalculateBitLengths(clcounts, 19, 7, clcl);
-  ZopfliLengthsToSymbols(clcl, 19, 7, clsymbols);
+  if (!size_only) ZopfliLengthsToSymbols(clcl, 19, 7, clsymbols);
 
   hclen = 15;
   /* Trim zeros. */
   while (hclen > 0 && clcounts[order[hclen + 4 - 1]] == 0) hclen--;
 
-  AddBits(hlit, 5, bp, out, outsize);
-  AddBits(hdist, 5, bp, out, outsize);
-  AddBits(hclen, 4, bp, out, outsize);
+  if (!size_only) {
+    AddBits(hlit, 5, bp, out, outsize);
+    AddBits(hdist, 5, bp, out, outsize);
+    AddBits(hclen, 4, bp, out, outsize);
 
-  for (i = 0; i < hclen + 4; i++) {
-    AddBits(clcl[order[i]], 3, bp, out, outsize);
+    for (i = 0; i < hclen + 4; i++) {
+      AddBits(clcl[order[i]], 3, bp, out, outsize);
+    }
+
+    for (i = 0; i < rle_size; i++) {
+      unsigned symbol = clsymbols[rle[i]];
+      AddHuffmanBits(symbol, clcl[rle[i]], bp, out, outsize);
+      /* Extra bits. */
+      if (rle[i] == 16) AddBits(rle_bits[i], 2, bp, out, outsize);
+      else if (rle[i] == 17) AddBits(rle_bits[i], 3, bp, out, outsize);
+      else if (rle[i] == 18) AddBits(rle_bits[i], 7, bp, out, outsize);
+    }
   }
 
-  for (i = 0; i < rle_size; i++) {
-    unsigned symbol = clsymbols[rle[i]];
-    AddHuffmanBits(symbol, clcl[rle[i]], bp, out, outsize);
-    /* Extra bits. */
-    if (rle[i] == 16) AddBits(rle_bits[i], 2, bp, out, outsize);
-    else if (rle[i] == 17) AddBits(rle_bits[i], 3, bp, out, outsize);
-    else if (rle[i] == 18) AddBits(rle_bits[i], 7, bp, out, outsize);
+  result_size += 14;  /* hlit, hdist, hclen bits */
+  result_size += (hclen + 4) * 3;  /* clcl bits */
+  for(i = 0; i < 19; i++) {
+    result_size += clcl[i] * clcounts[i];
   }
+  /* Extra bits. */
+  result_size += clcounts[16] * 2;
+  result_size += clcounts[17] * 3;
+  result_size += clcounts[18] * 7;
 
-  free(lld_lengths);
+  /* Note: in case of "size_only" these are null pointers so no effect. */
   free(rle);
   free(rle_bits);
+
+  return result_size;
+}
+
+static void AddDynamicTree(const unsigned* ll_lengths,
+                           const unsigned* d_lengths,
+                           unsigned char* bp,
+                           unsigned char** out, size_t* outsize) {
+  int i;
+  int best = 0;
+  size_t bestsize = 0;
+
+  for(i = 0; i < 8; i++) {
+    size_t size = EncodeTree(ll_lengths, d_lengths,
+                             i & 1, i & 2, i & 4,
+                             0, 0, 0);
+    if (bestsize == 0 || size < bestsize) {
+      bestsize = size;
+      best = i;
+    }
+  }
+
+  EncodeTree(ll_lengths, d_lengths,
+             best & 1, best & 2, best & 4,
+             bp, out, outsize);
 }
 
 /*
 Gives the exact size of the tree, in bits, as it will be encoded in DEFLATE.
 */
 static size_t CalculateTreeSize(const unsigned* ll_lengths,
-                                const unsigned* d_lengths,
-                                size_t* ll_counts, size_t* d_counts) {
-  unsigned char* dummy = 0;
-  size_t dummysize = 0;
-  unsigned char bp = 0;
+                                const unsigned* d_lengths) {
+  size_t result = 0;
+  int i;
 
-  (void)ll_counts;
-  (void)d_counts;
+  for(i = 0; i < 8; i++) {
+    size_t size = EncodeTree(ll_lengths, d_lengths,
+                             i & 1, i & 2, i & 4,
+                             0, 0, 0);
+    if (result == 0 || size < result) result = size;
+  }
 
-  AddDynamicTree(ll_lengths, d_lengths, &bp, &dummy, &dummysize);
-  free(dummy);
-
-  return dummysize * 8 + (bp & 7);
+  return result;
 }
 
 /*
@@ -318,27 +366,140 @@ static size_t CalculateBlockSymbolSize(const unsigned* ll_lengths,
   return result;
 }
 
-double ZopfliCalculateBlockSize(const unsigned short* litlens,
-                                const unsigned short* dists,
-                                size_t lstart, size_t lend, int btype) {
+static size_t AbsDiff(size_t x, size_t y) {
+  if (x > y)
+    return x - y;
+  else
+    return y - x;
+}
+
+/*
+Change the population counts in a way that the consequent Hufmann tree
+compression, especially its rle-part will be more likely to compress this data
+more efficiently. length containts the size of the histogram.
+*/
+void OptimizeHuffmanForRle(int length, size_t* counts) {
+  int i, k, stride;
+  size_t symbol, sum, limit;
+  int* good_for_rle;
+
+  /* 1) We don't want to touch the trailing zeros. We may break the
+  rules of the format by adding more data in the distance codes. */
+  for (; length >= 0; --length) {
+    if (length == 0) {
+      return;
+    }
+    if (counts[length - 1] != 0) {
+      /* Now counts[0..length - 1] does not have trailing zeros. */
+      break;
+    }
+  }
+  /* 2) Let's mark all population counts that already can be encoded
+  with an rle code.*/
+  good_for_rle = (int*)malloc(length * sizeof(int));
+  for (i = 0; i < length; ++i) good_for_rle[i] = 0;
+
+  /* Let's not spoil any of the existing good rle codes.
+  Mark any seq of 0's that is longer than 5 as a good_for_rle.
+  Mark any seq of non-0's that is longer than 7 as a good_for_rle.*/
+  symbol = counts[0];
+  stride = 0;
+  for (i = 0; i < length + 1; ++i) {
+    if (i == length || counts[i] != symbol) {
+      if ((symbol == 0 && stride >= 5) || (symbol != 0 && stride >= 7)) {
+        for (k = 0; k < stride; ++k) {
+          good_for_rle[i - k - 1] = 1;
+        }
+      }
+      stride = 1;
+      if (i != length) {
+        symbol = counts[i];
+      }
+    } else {
+      ++stride;
+    }
+  }
+
+  /* 3) Let's replace those population counts that lead to more rle codes. */
+  stride = 0;
+  limit = counts[0];
+  sum = 0;
+  for (i = 0; i < length + 1; ++i) {
+    if (i == length || good_for_rle[i]
+        /* Heuristic for selecting the stride ranges to collapse. */
+        || AbsDiff(counts[i], limit) >= 4) {
+      if (stride >= 4 || (stride >= 3 && sum == 0)) {
+        /* The stride must end, collapse what we have, if we have enough (4). */
+        int count = (sum + stride / 2) / stride;
+        if (count < 1) count = 1;
+        if (sum == 0) {
+          /* Don't make an all zeros stride to be upgraded to ones. */
+          count = 0;
+        }
+        for (k = 0; k < stride; ++k) {
+          /* We don't want to change value at counts[i],
+          that is already belonging to the next stride. Thus - 1. */
+          counts[i - k - 1] = count;
+        }
+      }
+      stride = 0;
+      sum = 0;
+      if (i < length - 3) {
+        /* All interesting strides have a count of at least 4,
+        at least when non-zeros. */
+        limit = (counts[i] + counts[i + 1] +
+                 counts[i + 2] + counts[i + 3] + 2) / 4;
+      } else if (i < length) {
+        limit = counts[i];
+      } else {
+        limit = 0;
+      }
+    }
+    ++stride;
+    if (i != length) {
+      sum += counts[i];
+    }
+  }
+
+  free(good_for_rle);
+}
+
+/*
+Calculates the bit lengths for the symbols for dynamic blocks. Chooses bit
+lengths that give the smallest size of tree encoding + encoding of all the
+symbols to have smallest output size. This are not necessarily the ideal Huffman
+bit lengths.
+*/
+static void GetDynamicLengths(const unsigned short* litlens,
+                              const unsigned short* dists,
+                              size_t lstart, size_t lend,
+                              unsigned* ll_lengths, unsigned* d_lengths) {
   size_t ll_counts[288];
   size_t d_counts[32];
 
+  ZopfliLZ77Counts(litlens, dists, lstart, lend, ll_counts, d_counts);
+  OptimizeHuffmanForRle(288, ll_counts);
+  OptimizeHuffmanForRle(32, d_counts);
+  ZopfliCalculateBitLengths(ll_counts, 288, 15, ll_lengths);
+  ZopfliCalculateBitLengths(d_counts, 32, 15, d_lengths);
+  PatchDistanceCodesForBuggyDecoders(d_lengths);
+}
+
+double ZopfliCalculateBlockSize(const unsigned short* litlens,
+                                const unsigned short* dists,
+                                size_t lstart, size_t lend, int btype) {
   unsigned ll_lengths[288];
   unsigned d_lengths[32];
 
-  double result = 3; /*bfinal and btype bits*/
+  double result = 3; /* bfinal and btype bits */
 
   assert(btype == 1 || btype == 2); /* This is not for uncompressed blocks. */
 
   if(btype == 1) {
     GetFixedTree(ll_lengths, d_lengths);
   } else {
-    ZopfliLZ77Counts(litlens, dists, lstart, lend, ll_counts, d_counts);
-    ZopfliCalculateBitLengths(ll_counts, 288, 15, ll_lengths);
-    ZopfliCalculateBitLengths(d_counts, 32, 15, d_lengths);
-    PatchDistanceCodesForBuggyDecoders(d_lengths);
-    result += CalculateTreeSize(ll_lengths, d_lengths, ll_counts, d_counts);
+    GetDynamicLengths(litlens, dists, lstart, lend, ll_lengths, d_lengths);
+    result += CalculateTreeSize(ll_lengths, d_lengths);
   }
 
   result += CalculateBlockSymbolSize(
@@ -369,9 +530,8 @@ static void AddLZ77Block(const ZopfliOptions* options, int btype, int final,
                          const unsigned short* dists,
                          size_t lstart, size_t lend,
                          size_t expected_data_size,
-                         unsigned char* bp, unsigned char** out, size_t* outsize) {
-  size_t ll_counts[288];
-  size_t d_counts[32];
+                         unsigned char* bp,
+                         unsigned char** out, size_t* outsize) {
   unsigned ll_lengths[288];
   unsigned d_lengths[32];
   unsigned ll_symbols[288];
@@ -392,20 +552,14 @@ static void AddLZ77Block(const ZopfliOptions* options, int btype, int final,
     /* Dynamic block. */
     unsigned detect_tree_size;
     assert(btype == 2);
-    ZopfliLZ77Counts(litlens, dists, lstart, lend, ll_counts, d_counts);
-    ZopfliCalculateBitLengths(ll_counts, 288, 15, ll_lengths);
-    ZopfliCalculateBitLengths(d_counts, 32, 15, d_lengths);
-    PatchDistanceCodesForBuggyDecoders(d_lengths);
+
+    GetDynamicLengths(litlens, dists, lstart, lend, ll_lengths, d_lengths);
+
     detect_tree_size = *outsize;
     AddDynamicTree(ll_lengths, d_lengths, bp, out, outsize);
     if (options->verbose) {
       fprintf(stderr, "treesize: %d\n", (int)(*outsize - detect_tree_size));
     }
-
-    /* Assert that for every present symbol, the code length is non-zero. */
-    /* TODO(lode): remove this in release version. */
-    for (i = 0; i < 288; i++) assert(ll_counts[i] == 0 || ll_lengths[i] > 0);
-    for (i = 0; i < 32; i++) assert(d_counts[i] == 0 || d_lengths[i] > 0);
   }
 
   ZopfliLengthsToSymbols(ll_lengths, 288, 15, ll_symbols);
@@ -658,6 +812,7 @@ static void DeflateSplittingLast(const ZopfliOptions* options,
 #endif
 
   ZopfliCleanLZ77Store(&store);
+  free(splitpoints);
 }
 
 /*
@@ -702,4 +857,10 @@ void ZopfliDeflate(const ZopfliOptions* options, int btype, int final,
     i += size;
   }
 #endif
+  if (options->verbose) {
+    fprintf(stderr,
+            "Original Size: %d, Deflate: %d, Compression: %f%% Removed\n",
+            (int)insize, (int)*outsize,
+            100.0 * (double)(insize - *outsize) / (double)insize);
+  }
 }

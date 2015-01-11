@@ -1,12 +1,31 @@
 /*
-Copyright 2013 Google Inc. All Rights Reserved.
-Author: lode@google.com (Lode Vandevenne)
+Copyright 2011 Google Inc. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Author: lode.vandevenne@gmail.com (Lode Vandevenne)
+Author: jyrki.alakuijala@gmail.com (Jyrki Alakuijala)
 */
 
-#ifndef UTIL_COMPRESSION_ZOPFLI_INTERNAL_ZOPFLI_H_
-#define UTIL_COMPRESSION_ZOPFLI_INTERNAL_ZOPFLI_H_
+#ifndef ZOPFLI_ZOPFLI_H_
+#define ZOPFLI_ZOPFLI_H_
 
+#include <stddef.h>
 #include <stdlib.h> /* for size_t */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
 Options used throughout the program.
@@ -14,6 +33,9 @@ Options used throughout the program.
 typedef struct ZopfliOptions {
   /* Whether to print output */
   int verbose;
+
+  /* Whether to print more detailed output */
+  int verbose_more;
 
   /*
   Maximum amount of times to rerun forward and backward pass to optimize LZ77
@@ -68,4 +90,8 @@ void ZopfliCompress(const ZopfliOptions* options, ZopfliFormat output_type,
                     const unsigned char* in, size_t insize,
                     unsigned char** out, size_t* outsize);
 
-#endif  /* UTIL_COMPRESSION_ZOPFLI_INTERNAL_ZOPFLI_H_ */
+#ifdef __cplusplus
+}  // extern "C"
+#endif
+
+#endif  /* ZOPFLI_ZOPFLI_H_ */
