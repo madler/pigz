@@ -3520,7 +3520,7 @@ local void process(char *path)
             len = strlen(g.hname);
         }
 
-        /* replace .tgx with .tar when decoding */
+        /* replace .tgz with .tar when decoding */
         repl = g.decode && strcmp(to + len, ".tgz") ? "" : ".tar";
 
         /* create output file and open to write */
