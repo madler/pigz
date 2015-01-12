@@ -3252,11 +3252,8 @@ local char *justname(char *path)
 {
     char *p;
 
-    p = path + strlen(path);
-    while (--p >= path)
-        if (*p == '/')
-            break;
-    return p + 1;
+    p = strrchr(path, '/');
+    return p == NULL ? path : p + 1;
 }
 
 /* Copy file attributes, from -> to, as best we can.  This is best effort, so
