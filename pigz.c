@@ -1500,9 +1500,14 @@ local void compress_thread(void *dummy)
                 len = left;
             else if (len < 192)                     /* 1..63 */
                 len &= 0x3f;
-            else {                                  /* 32832..4227135 */
-                len = ((len & 0x3f) << 16) + (*next++ << 8) + 32832U;
-                len += *next++;
+            else if (len < 224){                    /* 32832..2129983 */
+                len = ((len & 0x1f) << 16) + (*next++ << 8);
+                len += *next++ + 32832U;
+            }
+            else {                                  /* 2129984..539000895 */
+                len = ((len & 0x1f) << 24) + (*next++ << 16);
+                len += *next++ << 8;
+                len += *next++ + 2129984UL;
             }
             left -= len;
 
@@ -1706,7 +1711,7 @@ local void append_len(struct job *job, size_t len)
 {
     struct space *lens;
 
-    assert(len < 4227136UL);
+    assert(len < 539000896UL);
     if (job->lens == NULL)
         job->lens = get_space(&lens_pool);
     lens = job->lens;
@@ -1719,9 +1724,16 @@ local void append_len(struct job *job, size_t len)
         lens->buf[lens->len++] = len >> 8;
         lens->buf[lens->len++] = len;
     }
-    else {
+    else if (len < 2129984UL) {
         len -= 32832U;
         lens->buf[lens->len++] = (len >> 16) + 192;
+        lens->buf[lens->len++] = len >> 8;
+        lens->buf[lens->len++] = len;
+    }
+    else {
+        len -= 2129984UL;
+        lens->buf[lens->len++] = (len >> 24) + 224;
+        lens->buf[lens->len++] = len >> 16;
         lens->buf[lens->len++] = len >> 8;
         lens->buf[lens->len++] = len;
     }
@@ -3882,7 +3894,7 @@ local int option(char *arg)
             if (n != g.block >> 10 ||
                 OUTPOOL(g.block) < g.block ||
                 (ssize_t)OUTPOOL(g.block) < 0 ||
-                g.block > (1UL << 22))
+                g.block > (1UL << 29))          /* limited by append_len() */
                 bail("block size too large: ", arg);
             new_opts();
         }
