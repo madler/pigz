@@ -3520,26 +3520,35 @@ local void process(char *path)
                  " (use -f to force)");
     }
     else {
-        char *to, *repl;
+        char *to = g.inf, *sufx = "";
+        size_t pre = 0;
 
-        /* use header name for output when decompressing with -N */
-        to = g.inf;
-        if (g.decode && (g.headis & 1) != 0 && g.hname != NULL) {
-            to = g.hname;
-            len = strlen(g.hname);
+        /* select parts of the output file name */
+        if (g.decode) {
+            /* for -dN or -dNT, use the path from the input file and the name
+               from the header, stripping any path in the header name */
+            if ((g.headis & 1) != 0 && g.hname != NULL) {
+                pre = justname(g.inf) - g.inf;
+                to = justname(g.hname);
+                len = strlen(to);
+            }
+            /* for -d or -dNn, replace abbreviated suffixes */
+            else if (strcmp(to + len, ".tgz") == 0)
+                sufx = ".tar";
         }
-
-        /* replace .tgz with .tar when decoding */
-        repl = g.decode && strcmp(to + len, ".tgz") ? "" : ".tar";
+        else
+            /* add appropriate suffix when compressing */
+            sufx = g.sufx;
 
         /* create output file and open to write */
-        g.outf = MALLOC(len + (g.decode ? strlen(repl) : strlen(g.sufx)) + 1);
+        g.outf = MALLOC(pre + len + strlen(sufx) + 1);
         if (g.outf == NULL)
             bail("not enough memory", "");
-        memcpy(g.outf, to, len);
-        strcpy(g.outf + len, g.decode ? repl : g.sufx);
+        memcpy(g.outf, g.inf, pre);
+        memcpy(g.outf + pre, to, len);
+        strcpy(g.outf + pre + len, sufx);
         g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY |
-                             (g.force ? 0 : O_EXCL), 0600);
+                              (g.force ? 0 : O_EXCL), 0600);
 
         /* if exists and not -f, give user a chance to overwrite */
         if (g.outd < 0 && errno == EEXIST && isatty(0) && g.verbosity) {
