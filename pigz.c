@@ -3849,11 +3849,11 @@ local int option(char *arg)
                 fputs("No warranty is provided or implied.\n", stderr);
                 exit(0);
             case 'M':  get = 5;  break;
-            case 'N':  g.headis = 3;  break;
+            case 'N':  g.headis |= 0xf;  break;
             case 'O':  g.zopts.blocksplitting = 0;  break;
             case 'R':  g.rsync = 1;  break;
             case 'S':  get = 3;  break;
-            case 'T':  g.headis &= ~2;  break;
+            case 'T':  g.headis &= ~0xa;  break;
             case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
                 bail("invalid option: LZW output not supported: ", bad);
@@ -3861,13 +3861,13 @@ local int option(char *arg)
                 bail("invalid option: ascii conversion not supported: ", bad);
             case 'b':  get = 1;  break;
             case 'c':  g.pipeout = 1;  break;
-            case 'd':  g.decode = 1;  g.headis = 0;  break;
+            case 'd':  if (!g.decode) g.headis >>= 2;  g.decode = 1;  break;
             case 'f':  g.force = 1;  break;
             case 'h':  help();  break;
             case 'i':  g.setdict = 0;  break;
             case 'k':  g.keep = 1;  break;
             case 'l':  g.list = 1;  break;
-            case 'n':  g.headis &= ~1;  break;
+            case 'n':  g.headis &= ~5;  break;
             case 'p':  get = 2;  break;
             case 'q':  g.verbosity = 0;  break;
             case 'r':  g.recurse = 1;  break;
@@ -4007,10 +4007,17 @@ int main(int argc, char **argv)
     }
 
     /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
-    if (strcmp(g.prog, "unpigz") == 0 || strcmp(g.prog, "gunzip") == 0)
-        g.decode = 1, g.headis = 0;
-    if ((n = strlen(g.prog)) > 2 && strcmp(g.prog + n - 3, "cat") == 0)
-        g.decode = 1, g.headis = 0, g.pipeout = 1;
+    if (strcmp(g.prog, "unpigz") == 0 || strcmp(g.prog, "gunzip") == 0) {
+        if (!g.decode)
+            g.headis >>= 2;
+        g.decode = 1;
+    }
+    if ((n = strlen(g.prog)) > 2 && strcmp(g.prog + n - 3, "cat") == 0) {
+        if (!g.decode)
+            g.headis >>= 2;
+        g.decode = 1;
+        g.pipeout = 1;
+    }
 
     /* if no arguments and compressed data to or from a terminal, show help */
     if (argc < 2 && isatty(g.decode ? 0 : 1))
