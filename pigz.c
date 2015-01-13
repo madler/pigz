@@ -323,7 +323,7 @@
                         /* O_WRONLY */
 #include <dirent.h>     /* opendir(), readdir(), closedir(), DIR, */
                         /* struct dirent */
-#include <limits.h>     /* PATH_MAX, UINT_MAX, INT_MAX */
+#include <limits.h>     /* UINT_MAX, INT_MAX */
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #  include <inttypes.h> /* intmax_t */
 #endif
@@ -457,8 +457,9 @@ local struct {
     char *prog;             /* name by which pigz was invoked */
     int ind;                /* input file descriptor */
     int outd;               /* output file descriptor */
-    char inf[PATH_MAX+1];   /* input file name (accommodate recursion) */
-    char *outf;             /* output file name (allocated if not NULL) */
+    char *inf;              /* input file name (allocated) */
+    size_t inz;             /* input file name allocated size */
+    char *outf;             /* output file name (allocated) */
     int verbosity;          /* 0 = quiet, 1 = normal, 2 = verbose, 3 = trace */
     int headis;             /* 1 to store name, 2 to store date, 3 both */
     int pipeout;            /* write output to stdout even if file */
@@ -800,6 +801,65 @@ local void log_dump(void)
 #define Trace(x)
 
 #endif
+
+/* compute next size up by multiplying by about 2**(1/3) and rounding to the
+   next power of 2 if close (three applications results in doubling) -- if
+   small, go up to at least 16, if overflow, go to max size_t value */
+local inline size_t grow(size_t size)
+{
+    size_t was, top;
+    int shift;
+
+    was = size;
+    size += size >> 2;
+    top = size;
+    for (shift = 0; top > 7; shift++)
+        top >>= 1;
+    if (top == 7)
+        size = (size_t)1 << (shift + 3);
+    if (size < 16)
+        size = 16;
+    if (size <= was)
+        size = (size_t)0 - 1;
+    return size;
+}
+
+/* copy cpy[0..len-1] to *mem + off, growing *mem if necessary, where *size is
+   the allocated size of *mem -- return the number of bytes in the result */
+local inline size_t vmemcpy(char **mem, size_t *size, size_t off,
+                            void *cpy, size_t len)
+{
+    size_t need;
+    char *bigger;
+
+    need = off + len;
+    if (need < off)
+        bail("overflow", "");
+    if (need > *size) {
+        need = grow(need);
+        if (off)
+            bigger = REALLOC(*mem, need);
+        else {
+            RELEASE(*mem);
+            *size = 0;
+            bigger = MALLOC(need);
+        }
+        if (bigger == NULL)
+            bail("not enough memory", "");
+        *mem = bigger;
+        *size = need;
+    }
+    memcpy(*mem + off, cpy, len);
+    return off + len;
+}
+
+/* copy the zero-terminated string cpy to *str + off, growing *str if
+   necessary, where *size is the allocated size of *str -- return the length of
+   the string plus one */
+local inline size_t vstrcpy(char **str, size_t *size, size_t off, void *cpy)
+{
+    return vmemcpy(str, size, off, cpy, strlen(cpy) + 1);
+}
 
 /* read up to len bytes into buf, repeating read() calls as needed */
 local size_t readn(int desc, unsigned char *buf, size_t len)
@@ -1197,28 +1257,6 @@ local struct space *get_space(struct pool *pool)
     space->len = 0;
     space->pool = pool;                 /* remember the pool this belongs to */
     return space;
-}
-
-/* compute next size up by multiplying by about 2**(1/3) and round to the next
-   power of 2 if we're close (so three applications results in doubling) -- if
-   small, go up to at least 16, if overflow, go to max size_t value */
-local size_t grow(size_t size)
-{
-    size_t was, top;
-    int shift;
-
-    was = size;
-    size += size >> 2;
-    top = size;
-    for (shift = 0; top > 7; shift++)
-        top >>= 1;
-    if (top == 7)
-        size = (size_t)1 << (shift + 3);
-    if (size < 16)
-        size = 16;
-    if (size <= was)
-        size = (size_t)0 - 1;
-    return size;
 }
 
 /* increase the size of the buffer in space */
@@ -2500,25 +2538,15 @@ local int get_header(int save)
     /* read file name, if present, into allocated memory */
     if ((flags & 8) && save) {
         unsigned char *end;
-        size_t copy, have, size = 128;
-        g.hname = MALLOC(size);
-        if (g.hname == NULL)
-            bail("not enough memory", "");
+        size_t copy, have, size = 0;
+        g.hname = NULL;
         have = 0;
         do {
             if (g.in_left == 0 && load() == 0)
                 return -3;
             end = memchr(g.in_next, 0, g.in_left);
             copy = end == NULL ? g.in_left : (size_t)(end - g.in_next) + 1;
-            if (have + copy > size) {
-                while (have + copy > (size <<= 1))
-                    ;
-                g.hname = REALLOC(g.hname, size);
-                if (g.hname == NULL)
-                    bail("not enough memory", "");
-            }
-            memcpy(g.hname + have, g.in_next, copy);
-            have += copy;
+            have = vmemcpy(&g.hname, &size, have, g.in_next, copy);
             g.in_left -= copy;
             g.in_next += copy;
         } while (end == NULL);
@@ -3308,7 +3336,7 @@ local void process(char *path)
 
     /* open input file with name in, descriptor ind -- set name and mtime */
     if (path == NULL) {
-        strcpy(g.inf, "<stdin>");
+        vstrcpy(&g.inf, &g.inz, 0, "<stdin>");
         g.ind = 0;
         g.name = NULL;
         g.mtime = g.headis & 2 ?
@@ -3317,22 +3345,19 @@ local void process(char *path)
     }
     else {
         /* set input file name (already set if recursed here) */
-        if (path != g.inf) {
-            strncpy(g.inf, path, sizeof(g.inf));
-            if (g.inf[sizeof(g.inf) - 1])
-                bail("name too long: ", path);
-        }
+        if (path != g.inf)
+            vstrcpy(&g.inf, &g.inz, 0, path);
         len = strlen(g.inf);
 
         /* try to stat input file -- if not there and decoding, look for that
            name with compressed suffixes */
         if (lstat(g.inf, &st)) {
             if (errno == ENOENT && (g.list || g.decode)) {
-                char **try = sufs;
+                char **sufx = sufs;
                 do {
-                    if (*try == NULL || len + strlen(*try) >= sizeof(g.inf))
+                    if (*sufx == NULL)
                         break;
-                    strcpy(g.inf + len, *try++);
+                    vstrcpy(&g.inf, &g.inz, len, *sufx++);
                     errno = 0;
                 } while (lstat(g.inf, &st) && errno == ENOENT);
             }
@@ -3368,8 +3393,8 @@ local void process(char *path)
 
         /* recurse into directory (assumes Unix) */
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
-            char *roll, *item, *cut, *base, *bigger;
-            size_t len, hold;
+            char *roll = NULL;
+            size_t size = 0, off = 0, base;
             DIR *here;
             struct dirent *next;
 
@@ -3378,54 +3403,24 @@ local void process(char *path)
             here = opendir(g.inf);
             if (here == NULL)
                 return;
-            hold = 512;
-            roll = MALLOC(hold);
-            if (roll == NULL)
-                bail("not enough memory", "");
-            *roll = 0;
-            item = roll;
             while ((next = readdir(here)) != NULL) {
                 if (next->d_name[0] == 0 ||
                     (next->d_name[0] == '.' && (next->d_name[1] == 0 ||
                      (next->d_name[1] == '.' && next->d_name[2] == 0))))
                     continue;
-                len = strlen(next->d_name) + 1;
-                if (item + len + 1 > roll + hold) {
-                    do {                    /* make roll bigger */
-                        hold <<= 1;
-                    } while (item + len + 1 > roll + hold);
-                    bigger = REALLOC(roll, hold);
-                    if (bigger == NULL) {
-                        FREE(roll);
-                        bail("not enough memory", "");
-                    }
-                    item = bigger + (item - roll);
-                    roll = bigger;
-                }
-                strcpy(item, next->d_name);
-                item += len;
-                *item = 0;
+                off = vstrcpy(&roll, &size, off, next->d_name);
             }
             closedir(here);
+            vstrcpy(&roll, &size, off, "");
 
             /* run process() for each entry in the directory */
-            cut = base = g.inf + strlen(g.inf);
-            if (base > g.inf && base[-1] != (unsigned char)'/') {
-                if ((size_t)(base - g.inf) >= sizeof(g.inf))
-                    bail("path too long", g.inf);
-                *base++ = '/';
-            }
-            item = roll;
-            while (*item) {
-                strncpy(base, item, sizeof(g.inf) - (base - g.inf));
-                if (g.inf[sizeof(g.inf) - 1]) {
-                    strcpy(g.inf + (sizeof(g.inf) - 4), "...");
-                    bail("path too long: ", g.inf);
-                }
+            base = len && g.inf[len - 1] != (unsigned char)'/' ?
+                   vstrcpy(&g.inf, &g.inz, len, "/") : len;
+            for (off = 0; roll[off]; off += strlen(roll + off) + 1) {
+                vstrcpy(&g.inf, &g.inz, base, roll + off);
                 process(g.inf);
-                item += strlen(item) + 1;
             }
-            *cut = 0;
+            g.inf[len] = 0;
 
             /* release list of entries */
             FREE(roll);
@@ -3953,6 +3948,8 @@ int main(int argc, char **argv)
     char *opts, *p;                 /* environment default options, marker */
 
     /* initialize globals */
+    g.inf = NULL;
+    g.inz = 0;
     g.outf = NULL;
     g.first = 1;
     g.hname = NULL;
@@ -4050,6 +4047,8 @@ int main(int argc, char **argv)
         process(NULL);
 
     /* done -- release resources, show log */
+    RELEASE(g.inf);
+    g.inz = 0;
     new_opts();
     log_dump();
     return 0;
