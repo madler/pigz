@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
- * Copyright (C) 2008, 2012 Mark Adler
- * Version 1.3  13 Jan 2012  Mark Adler
+ * Copyright (C) 2008, 2011, 2012, 2015 Mark Adler
+ * Version 1.4  19 Jan 2015  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -17,6 +17,8 @@
    1.3    13 Jan 2012  Add large file #define for consistency with pigz.c
                        Update thread portability #defines per IEEE 1003.1-2008
                        Fix documentation in yarn.h for yarn_prefix
+   1.4    19 Jan 2015  Allow yarn_abort() to avoid error message to stderr
+                       Accept and do nothing for NULL argument to free_lock()
  */
 
 /* for thread portability */
@@ -54,10 +56,10 @@ void (*yarn_abort)(int) = NULL;
 /* immediately exit -- use for errors that shouldn't ever happen */
 local void fail(int err)
 {
-    fprintf(stderr, "%s: %s (%d) -- aborting\n", yarn_prefix,
-            err == ENOMEM ? "out of memory" : "internal pthread error", err);
     if (yarn_abort != NULL)
         yarn_abort(err);
+    fprintf(stderr, "%s: %s (%d) -- aborting\n", yarn_prefix,
+            err == ENOMEM ? "out of memory" : "internal pthread error", err);
     exit(err == ENOMEM || err == EAGAIN ? err : EINVAL);
 }
 
@@ -172,6 +174,9 @@ long peek_lock(lock *bolt)
 void free_lock(lock *bolt)
 {
     int ret;
+
+    if (bolt == NULL)
+        return;
     if ((ret = pthread_cond_destroy(&(bolt->cond))) ||
         (ret = pthread_mutex_destroy(&(bolt->mutex))))
         fail(ret);

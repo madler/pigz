@@ -308,7 +308,8 @@
                         /* atoi(), getenv() */
 #include <stdarg.h>     /* va_start(), va_end(), va_list */
 #include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), strcpy() */
-                        /* strncpy(), strlen(), strcat(), strrchr() */
+                        /* strncpy(), strlen(), strcat(), strrchr(),
+                           strerror() */
 #include <errno.h>      /* errno, EEXIST */
 #include <assert.h>     /* assert() */
 #include <time.h>       /* ctime(), time(), time_t, mktime() */
@@ -366,6 +367,8 @@
 #include "zopfli/src/zopfli/deflate.h"  /* ZopfliDeflatePart(),
                                            ZopfliInitOptions(),
                                            ZopfliOptions */
+
+#include "try.h"        /* try, catch, always, throw, drop, punt, ball_t */
 
 /* for local functions and globals */
 #define local static
@@ -524,16 +527,6 @@ local int complain(char *fmt, ...)
     return 0;
 }
 
-/* exit with error, delete output file if in the middle of writing it */
-local int bail(char *why, char *what)
-{
-    if (g.outd != -1 && g.outf != NULL)
-        unlink(g.outf);
-    complain("abort: %s%s", why, what);
-    exit(1);
-    return 0;
-}
-
 #ifdef DEBUG
 
 /* memory tracking */
@@ -635,6 +628,30 @@ local void zlib_free(voidpf opaque, voidpf address)
 #define ZALLOC zlib_alloc
 #define ZFREE zlib_free
 
+#else /* !DEBUG */
+
+#define MALLOC malloc
+#define REALLOC realloc
+#define FREE free
+#define OPAQUE Z_NULL
+#define ZALLOC Z_NULL
+#define ZFREE Z_NULL
+
+#endif
+
+/* assured memory allocation */
+local void *alloc(void *ptr, size_t size)
+{
+    ptr = REALLOC(ptr, size);
+    if (ptr == NULL)
+        throw(ENOMEM, "not enough memory");
+    return ptr;
+}
+
+#if DEBUG
+
+/* logging */
+
 /* starting time of day for tracing */
 local struct timeval start;
 
@@ -677,18 +694,12 @@ local void log_add(char *fmt, ...)
     char msg[MAXMSG];
 
     gettimeofday(&now, NULL);
-    me = MALLOC(sizeof(struct log));
-    if (me == NULL)
-        bail("not enough memory", "");
+    me = alloc(NULL, sizeof(struct log));
     me->when = now;
     va_start(ap, fmt);
     vsnprintf(msg, MAXMSG, fmt, ap);
     va_end(ap);
-    me->msg = MALLOC(strlen(msg) + 1);
-    if (me->msg == NULL) {
-        FREE(me);
-        bail("not enough memory", "");
-    }
+    me->msg = alloc(NULL, strlen(msg) + 1);
     strcpy(me->msg, msg);
     me->next = NULL;
 #ifndef NOTHREAD
@@ -790,17 +801,30 @@ local void log_dump(void)
 
 #else /* !DEBUG */
 
-#define MALLOC malloc
-#define REALLOC realloc
-#define FREE free
-#define OPAQUE Z_NULL
-#define ZALLOC Z_NULL
-#define ZFREE Z_NULL
-
 #define log_dump()
 #define Trace(x)
 
 #endif
+
+/* abort or catch termination signal */
+local void cut_short(int sig)
+{
+    if (sig == SIGINT)
+        Trace(("termination by user"));
+    if (g.outd != -1 && g.outf != NULL)
+        unlink(g.outf);
+    RELEASE(g.outf);
+    log_dump();
+    _exit(sig < 0 ? -sig : ECANCELED);
+}
+
+/* common code for catch block of top routine in the thread */
+#define THREADABORT(ball) \
+    do { \
+        complain("abort: %s", (ball).why); \
+        drop(ball); \
+        cut_short(-(ball).code); \
+    } while (0)
 
 /* compute next size up by multiplying by about 2**(1/3) and rounding to the
    next power of 2 if close (three applications results in doubling) -- if
@@ -830,23 +854,17 @@ local inline size_t vmemcpy(char **mem, size_t *size, size_t off,
                             void *cpy, size_t len)
 {
     size_t need;
-    char *bigger;
 
     need = off + len;
     if (need < off)
-        bail("overflow", "");
+        throw(EOVERFLOW, "overflow");
     if (need > *size) {
         need = grow(need);
-        if (off)
-            bigger = REALLOC(*mem, need);
-        else {
+        if (off == 0) {
             RELEASE(*mem);
             *size = 0;
-            bigger = MALLOC(need);
         }
-        if (bigger == NULL)
-            bail("not enough memory", "");
-        *mem = bigger;
+        *mem = alloc(*mem, need);
         *size = need;
     }
     memcpy(*mem + off, cpy, len);
@@ -871,7 +889,7 @@ local size_t readn(int desc, unsigned char *buf, size_t len)
     while (len) {
         ret = read(desc, buf, len);
         if (ret < 0)
-            bail("read error on ", g.inf);
+            throw(errno, "read error on %s (%s)", g.inf, strerror(errno));
         if (ret == 0)
             break;
         buf += ret;
@@ -888,10 +906,8 @@ local void writen(int desc, unsigned char *buf, size_t len)
 
     while (len) {
         ret = write(desc, buf, len);
-        if (ret < 1) {
-            complain("write error code %d", errno);
-            bail("write error on ", g.outf);
-        }
+        if (ret < 1)
+            throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
         buf += ret;
         len -= ret;
     }
@@ -1246,13 +1262,9 @@ local struct space *get_space(struct pool *pool)
         pool->limit--;
     pool->made++;
     release(pool->have);
-    space = MALLOC(sizeof(struct space));
-    if (space == NULL)
-        bail("not enough memory", "");
+    space = alloc(NULL, sizeof(struct space));
     space->use = new_lock(1);           /* initially one user */
-    space->buf = MALLOC(pool->size);
-    if (space->buf == NULL)
-        bail("not enough memory", "");
+    space->buf = alloc(NULL, pool->size);
     space->size = pool->size;
     space->len = 0;
     space->pool = pool;                 /* remember the pool this belongs to */
@@ -1267,12 +1279,10 @@ local void grow_space(struct space *space)
     /* compute next size up */
     more = grow(space->size);
     if (more == space->size)
-        bail("not enough memory", "");
+        throw(EOVERFLOW, "overflow");
 
     /* reallocate the buffer */
-    space->buf = REALLOC(space->buf, more);
-    if (space->buf == NULL)
-        bail("not enough memory", "");
+    space->buf = alloc(space->buf, more);
     space->size = more;
 }
 
@@ -1290,6 +1300,8 @@ local void drop_space(struct space *space)
     int use;
     struct pool *pool;
 
+    if (space == NULL)
+        return;
     possess(space->use);
     use = peek_lock(space->use);
     assert(use != 0);
@@ -1462,214 +1474,223 @@ local void compress_thread(void *dummy)
     int bits;                       /* deflate pending bits */
 #endif
     struct space *temp = NULL;      /* temporary space for zopfli input */
+    int ret;                        /* zlib return code */
     z_stream strm;                  /* deflate stream */
+    ball_t err;                     /* error information from throw() */
 
     (void)dummy;
 
-    /* initialize the deflate stream for this thread */
-    strm.zfree = ZFREE;
-    strm.zalloc = ZALLOC;
-    strm.opaque = OPAQUE;
-    if (deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
-        bail("not enough memory", "");
+    try {
+        /* initialize the deflate stream for this thread */
+        strm.zfree = ZFREE;
+        strm.zalloc = ZALLOC;
+        strm.opaque = OPAQUE;
+        ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+        if (ret == Z_MEM_ERROR)
+            throw(ENOMEM, "not enough memory");
+        if (ret != Z_OK)
+            throw(EINVAL, "internal error");
 
-    /* keep looking for work */
-    for (;;) {
-        /* get a job (like I tell my son) */
-        possess(compress_have);
-        wait_for(compress_have, NOT_TO_BE, 0);
-        job = compress_head;
-        assert(job != NULL);
-        if (job->seq == -1)
-            break;
-        compress_head = job->next;
-        if (job->next == NULL)
-            compress_tail = &compress_head;
-        twist(compress_have, BY, -1);
+        /* keep looking for work */
+        for (;;) {
+            /* get a job (like I tell my son) */
+            possess(compress_have);
+            wait_for(compress_have, NOT_TO_BE, 0);
+            job = compress_head;
+            assert(job != NULL);
+            if (job->seq == -1)
+                break;
+            compress_head = job->next;
+            if (job->next == NULL)
+                compress_tail = &compress_head;
+            twist(compress_have, BY, -1);
 
-        /* got a job -- initialize and set the compression level (note that if
-           deflateParams() is called immediately after deflateReset(), there is
-           no need to initialize the input/output for the stream) */
-        Trace(("-- compressing #%ld", job->seq));
-        if (g.level <= 9) {
-            (void)deflateReset(&strm);
-            (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
-        }
-        else {
-            temp = get_space(&out_pool);
-            temp->len = 0;
-        }
-
-        /* set dictionary if provided, release that input or dictionary buffer
-           (not NULL if g.setdict is true and if this is not the first work
-           unit) */
-        if (job->out != NULL) {
-            len = job->out->len;
-            left = len < DICT ? len : DICT;
-            if (g.level <= 9)
-                deflateSetDictionary(&strm, job->out->buf + (len - left),
-                                     left);
-            else {
-                memcpy(temp->buf, job->out->buf + (len - left), left);
-                temp->len = left;
-            }
-            drop_space(job->out);
-        }
-
-        /* set up input and output */
-        job->out = get_space(&out_pool);
-        if (g.level <= 9) {
-            strm.next_in = job->in->buf;
-            strm.next_out = job->out->buf;
-        }
-        else
-            memcpy(temp->buf + temp->len, job->in->buf, job->in->len);
-
-        /* compress each block, either flushing or finishing */
-        next = job->lens == NULL ? NULL : job->lens->buf;
-        left = job->in->len;
-        job->out->len = 0;
-        do {
-            /* decode next block length from blocks list */
-            len = next == NULL ? 128 : *next++;
-            if (len < 128)                          /* 64..32831 */
-                len = (len << 8) + (*next++) + 64;
-            else if (len == 128)                    /* end of list */
-                len = left;
-            else if (len < 192)                     /* 1..63 */
-                len &= 0x3f;
-            else if (len < 224){                    /* 32832..2129983 */
-                len = ((len & 0x1f) << 16) + (*next++ << 8);
-                len += *next++ + 32832U;
-            }
-            else {                                  /* 2129984..539000895 */
-                len = ((len & 0x1f) << 24) + (*next++ << 16);
-                len += *next++ << 8;
-                len += *next++ + 2129984UL;
-            }
-            left -= len;
-
+            /* got a job -- initialize and set the compression level (note that
+               if deflateParams() is called immediately after deflateReset(),
+               there is no need to initialize input/output for the stream) */
+            Trace(("-- compressing #%ld", job->seq));
             if (g.level <= 9) {
-                /* run MAXP2-sized amounts of input through deflate -- this
-                   loop is needed for those cases where the unsigned type is
-                   smaller than the size_t type, or when len is close to the
-                   limit of the size_t type */
-                while (len > MAXP2) {
-                    strm.avail_in = MAXP2;
-                    deflate_engine(&strm, job->out, Z_NO_FLUSH);
-                    len -= MAXP2;
-                }
-
-                /* run the last piece through deflate -- end on a byte
-                   boundary, using a sync marker if necessary, or finish the
-                   deflate stream if this is the last block */
-                strm.avail_in = (unsigned)len;
-                if (left || job->more) {
-#if ZLIB_VERNUM >= 0x1260
-                    deflate_engine(&strm, job->out, Z_BLOCK);
-
-                    /* add enough empty blocks to get to a byte boundary */
-                    (void)deflatePending(&strm, Z_NULL, &bits);
-                    if (bits & 1)
-                        deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
-                    else if (bits & 7) {
-                        do {        /* add static empty blocks */
-                            bits = deflatePrime(&strm, 10, 2);
-                            assert(bits == Z_OK);
-                            (void)deflatePending(&strm, Z_NULL, &bits);
-                        } while (bits & 7);
-                        deflate_engine(&strm, job->out, Z_BLOCK);
-                    }
-#else
-                    deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
-#endif
-                }
-                else
-                    deflate_engine(&strm, job->out, Z_FINISH);
+                (void)deflateReset(&strm);
+                (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
             }
             else {
-                /* compress len bytes using zopfli, bring to byte boundary */
-                unsigned char bits, *out;
-                size_t outsize;
-
-                out = NULL;
-                outsize = 0;
-                bits = 0;
-                ZopfliDeflatePart(&g.zopts, 2, !(left || job->more),
-                                  temp->buf, temp->len, temp->len + len,
-                                  &bits, &out, &outsize);
-                assert(job->out->len + outsize + 5 <= job->out->size);
-                memcpy(job->out->buf + job->out->len, out, outsize);
-                free(out);
-                job->out->len += outsize;
-                if (left || job->more) {
-                    bits &= 7;
-                    if (bits & 1) {
-                        if (bits == 7)
-                            job->out->buf[job->out->len++] = 0;
-                        job->out->buf[job->out->len++] = 0;
-                        job->out->buf[job->out->len++] = 0;
-                        job->out->buf[job->out->len++] = 0xff;
-                        job->out->buf[job->out->len++] = 0xff;
-                    }
-                    else if (bits) {
-                        do {
-                            job->out->buf[job->out->len - 1] += 2 << bits;
-                            job->out->buf[job->out->len++] = 0;
-                            bits += 2;
-                        } while (bits < 8);
-                    }
-                }
-                temp->len += len;
+                if (temp == NULL)
+                    temp = get_space(&out_pool);
+                temp->len = 0;
             }
-        } while (left);
-        if (g.level > 9)
-            drop_space(temp);
-        if (job->lens != NULL) {
+
+            /* set dictionary if provided, release that input or dictionary
+               buffer (not NULL if g.setdict is true and if this is not the
+               first work unit) */
+            if (job->out != NULL) {
+                len = job->out->len;
+                left = len < DICT ? len : DICT;
+                if (g.level <= 9)
+                    deflateSetDictionary(&strm, job->out->buf + (len - left),
+                                         left);
+                else {
+                    memcpy(temp->buf, job->out->buf + (len - left), left);
+                    temp->len = left;
+                }
+                drop_space(job->out);
+            }
+
+            /* set up input and output */
+            job->out = get_space(&out_pool);
+            if (g.level <= 9) {
+                strm.next_in = job->in->buf;
+                strm.next_out = job->out->buf;
+            }
+            else
+                memcpy(temp->buf + temp->len, job->in->buf, job->in->len);
+
+            /* compress each block, either flushing or finishing */
+            next = job->lens == NULL ? NULL : job->lens->buf;
+            left = job->in->len;
+            job->out->len = 0;
+            do {
+                /* decode next block length from blocks list */
+                len = next == NULL ? 128 : *next++;
+                if (len < 128)                  /* 64..32831 */
+                    len = (len << 8) + (*next++) + 64;
+                else if (len == 128)            /* end of list */
+                    len = left;
+                else if (len < 192)             /* 1..63 */
+                    len &= 0x3f;
+                else if (len < 224){            /* 32832..2129983 */
+                    len = ((len & 0x1f) << 16) + (*next++ << 8);
+                    len += *next++ + 32832U;
+                }
+                else {                          /* 2129984..539000895 */
+                    len = ((len & 0x1f) << 24) + (*next++ << 16);
+                    len += *next++ << 8;
+                    len += *next++ + 2129984UL;
+                }
+                left -= len;
+
+                if (g.level <= 9) {
+                    /* run MAXP2-sized amounts of input through deflate -- this
+                       loop is needed for those cases where the unsigned type
+                       is smaller than the size_t type, or when len is close to
+                       the limit of the size_t type */
+                    while (len > MAXP2) {
+                        strm.avail_in = MAXP2;
+                        deflate_engine(&strm, job->out, Z_NO_FLUSH);
+                        len -= MAXP2;
+                    }
+
+                    /* run the last piece through deflate -- end on a byte
+                       boundary, using a sync marker if necessary, or finish
+                       the deflate stream if this is the last block */
+                    strm.avail_in = (unsigned)len;
+                    if (left || job->more) {
+#if ZLIB_VERNUM >= 0x1260
+                        deflate_engine(&strm, job->out, Z_BLOCK);
+
+                        /* add enough empty blocks to get to a byte boundary */
+                        (void)deflatePending(&strm, Z_NULL, &bits);
+                        if (bits & 1)
+                            deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+                        else if (bits & 7) {
+                            do {        /* add static empty blocks */
+                                bits = deflatePrime(&strm, 10, 2);
+                                assert(bits == Z_OK);
+                                (void)deflatePending(&strm, Z_NULL, &bits);
+                            } while (bits & 7);
+                            deflate_engine(&strm, job->out, Z_BLOCK);
+                        }
+#else
+                        deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+#endif
+                    }
+                    else
+                        deflate_engine(&strm, job->out, Z_FINISH);
+                }
+                else {
+                    /* compress len bytes using zopfli, end at byte boundary */
+                    unsigned char bits, *out;
+                    size_t outsize;
+
+                    out = NULL;
+                    outsize = 0;
+                    bits = 0;
+                    ZopfliDeflatePart(&g.zopts, 2, !(left || job->more),
+                                      temp->buf, temp->len, temp->len + len,
+                                      &bits, &out, &outsize);
+                    assert(job->out->len + outsize + 5 <= job->out->size);
+                    memcpy(job->out->buf + job->out->len, out, outsize);
+                    free(out);
+                    job->out->len += outsize;
+                    if (left || job->more) {
+                        bits &= 7;
+                        if (bits & 1) {
+                            if (bits == 7)
+                                job->out->buf[job->out->len++] = 0;
+                            job->out->buf[job->out->len++] = 0;
+                            job->out->buf[job->out->len++] = 0;
+                            job->out->buf[job->out->len++] = 0xff;
+                            job->out->buf[job->out->len++] = 0xff;
+                        }
+                        else if (bits) {
+                            do {
+                                job->out->buf[job->out->len - 1] += 2 << bits;
+                                job->out->buf[job->out->len++] = 0;
+                                bits += 2;
+                            } while (bits < 8);
+                        }
+                    }
+                    temp->len += len;
+                }
+            } while (left);
             drop_space(job->lens);
             job->lens = NULL;
+            Trace(("-- compressed #%ld%s", job->seq,
+                   job->more ? "" : " (last)"));
+
+            /* reserve input buffer until check value has been calculated */
+            use_space(job->in);
+
+            /* insert write job in list in sorted order, alert write thread */
+            possess(write_first);
+            prior = &write_head;
+            while ((here = *prior) != NULL) {
+                if (here->seq > job->seq)
+                    break;
+                prior = &(here->next);
+            }
+            job->next = here;
+            *prior = job;
+            twist(write_first, TO, write_head->seq);
+
+            /* calculate the check value in parallel with writing, alert the
+               write thread that the calculation is complete, and drop this
+               usage of the input buffer */
+            len = job->in->len;
+            next = job->in->buf;
+            check = CHECK(0L, Z_NULL, 0);
+            while (len > MAXP2) {
+                check = CHECK(check, next, MAXP2);
+                len -= MAXP2;
+                next += MAXP2;
+            }
+            check = CHECK(check, next, (unsigned)len);
+            drop_space(job->in);
+            job->check = check;
+            Trace(("-- checked #%ld%s", job->seq, job->more ? "" : " (last)"));
+            possess(job->calc);
+            twist(job->calc, TO, 1);
+
+            /* done with that one -- go find another job */
         }
-        Trace(("-- compressed #%ld%s", job->seq, job->more ? "" : " (last)"));
 
-        /* reserve input buffer until check value has been calculated */
-        use_space(job->in);
-
-        /* insert write job in list in sorted order, alert write thread */
-        possess(write_first);
-        prior = &write_head;
-        while ((here = *prior) != NULL) {
-            if (here->seq > job->seq)
-                break;
-            prior = &(here->next);
-        }
-        job->next = here;
-        *prior = job;
-        twist(write_first, TO, write_head->seq);
-
-        /* calculate the check value in parallel with writing, alert the write
-           thread that the calculation is complete, and drop this usage of the
-           input buffer */
-        len = job->in->len;
-        next = job->in->buf;
-        check = CHECK(0L, Z_NULL, 0);
-        while (len > MAXP2) {
-            check = CHECK(check, next, MAXP2);
-            len -= MAXP2;
-            next += MAXP2;
-        }
-        check = CHECK(check, next, (unsigned)len);
-        drop_space(job->in);
-        job->check = check;
-        Trace(("-- checked #%ld%s", job->seq, job->more ? "" : " (last)"));
-        possess(job->calc);
-        twist(job->calc, TO, 1);
-
-        /* done with that one -- go find another job */
+        /* found job with seq == -1 -- return to join */
+        drop_space(temp);
+        release(compress_have);
+        (void)deflateEnd(&strm);
     }
-
-    /* found job with seq == -1 -- free deflate memory and return to join */
-    release(compress_have);
-    (void)deflateEnd(&strm);
+    catch (err) {
+        THREADABORT(err);
+    }
 }
 
 /* collect the write jobs off of the list in sequence order and write out the
@@ -1685,63 +1706,69 @@ local void write_thread(void *dummy)
     unsigned long ulen;             /* total uncompressed size (overflow ok) */
     unsigned long clen;             /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
+    ball_t err;                     /* error information from throw() */
 
     (void)dummy;
 
-    /* build and write header */
-    Trace(("-- write thread running"));
-    head = put_header();
+    try {
+        /* build and write header */
+        Trace(("-- write thread running"));
+        head = put_header();
 
-    /* process output of compress threads until end of input */
-    ulen = clen = 0;
-    check = CHECK(0L, Z_NULL, 0);
-    seq = 0;
-    do {
-        /* get next write job in order */
+        /* process output of compress threads until end of input */
+        ulen = clen = 0;
+        check = CHECK(0L, Z_NULL, 0);
+        seq = 0;
+        do {
+            /* get next write job in order */
+            possess(write_first);
+            wait_for(write_first, TO_BE, seq);
+            job = write_head;
+            write_head = job->next;
+            twist(write_first, TO, write_head == NULL ? -1 : write_head->seq);
+
+            /* update lengths, save uncompressed length for COMB */
+            more = job->more;
+            len = job->in->len;
+            drop_space(job->in);
+            ulen += (unsigned long)len;
+            clen += (unsigned long)(job->out->len);
+
+            /* write the compressed data and drop the output buffer */
+            Trace(("-- writing #%ld", seq));
+            writen(g.outd, job->out->buf, job->out->len);
+            drop_space(job->out);
+            Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
+
+            /* wait for check calculation to complete, then combine, once
+               the compress thread is done with the input, release it */
+            possess(job->calc);
+            wait_for(job->calc, TO_BE, 1);
+            release(job->calc);
+            check = COMB(check, job->check, len);
+
+            /* free the job */
+            free_lock(job->calc);
+            FREE(job);
+
+            /* get the next buffer in sequence */
+            seq++;
+        } while (more);
+
+        /* write trailer */
+        put_trailer(ulen, clen, check, head);
+
+        /* verify no more jobs, prepare for next use */
+        possess(compress_have);
+        assert(compress_head == NULL && peek_lock(compress_have) == 0);
+        release(compress_have);
         possess(write_first);
-        wait_for(write_first, TO_BE, seq);
-        job = write_head;
-        write_head = job->next;
-        twist(write_first, TO, write_head == NULL ? -1 : write_head->seq);
-
-        /* update lengths, save uncompressed length for COMB */
-        more = job->more;
-        len = job->in->len;
-        drop_space(job->in);
-        ulen += (unsigned long)len;
-        clen += (unsigned long)(job->out->len);
-
-        /* write the compressed data and drop the output buffer */
-        Trace(("-- writing #%ld", seq));
-        writen(g.outd, job->out->buf, job->out->len);
-        drop_space(job->out);
-        Trace(("-- wrote #%ld%s", seq, more ? "" : " (last)"));
-
-        /* wait for check calculation to complete, then combine, once
-           the compress thread is done with the input, release it */
-        possess(job->calc);
-        wait_for(job->calc, TO_BE, 1);
-        release(job->calc);
-        check = COMB(check, job->check, len);
-
-        /* free the job */
-        free_lock(job->calc);
-        FREE(job);
-
-        /* get the next buffer in sequence */
-        seq++;
-    } while (more);
-
-    /* write trailer */
-    put_trailer(ulen, clen, check, head);
-
-    /* verify no more jobs, prepare for next use */
-    possess(compress_have);
-    assert(compress_head == NULL && peek_lock(compress_have) == 0);
-    release(compress_have);
-    possess(write_first);
-    assert(write_head == NULL);
-    twist(write_first, TO, -1);
+        assert(write_head == NULL);
+        twist(write_first, TO, -1);
+    }
+    catch (err) {
+        THREADABORT(err);
+    }
 }
 
 /* encode a hash hit to the block lengths list -- hit == 0 ends the list */
@@ -1815,9 +1842,7 @@ local void parallel_compress(void)
     left = 0;
     do {
         /* create a new job */
-        job = MALLOC(sizeof(struct job));
-        if (job == NULL)
-            bail("not enough memory", "");
+        job = alloc(NULL, sizeof(struct job));
         job->calc = new_lock(0);
 
         /* update input spaces */
@@ -1935,7 +1960,7 @@ local void parallel_compress(void)
         job->seq = seq;
         Trace(("-- read #%ld%s", seq, more ? "" : " (last)"));
         if (++seq < 1)
-            bail("input too long: ", g.inf);
+            throw(EOVERFLOW, "overflow");
 
         /* start another compress thread if needed */
         if (cthreads < seq && cthreads < g.procs) {
@@ -2011,18 +2036,21 @@ local void single_compress(int reset)
 
     /* initialize the deflate structure if this is the first time */
     if (strm == NULL) {
+        int ret;                    /* zlib return code */
+
         out_size = g.block > MAXP2 ? MAXP2 : (unsigned)g.block;
-        if ((in = MALLOC(g.block + DICT)) == NULL ||
-            (next = MALLOC(g.block + DICT)) == NULL ||
-            (out = MALLOC(out_size)) == NULL ||
-            (strm = MALLOC(sizeof(z_stream))) == NULL)
-            bail("not enough memory", "");
+        in = alloc(NULL, g.block + DICT);
+        next = alloc(NULL, g.block + DICT);
+        out = alloc(NULL, out_size);
+        strm = alloc(NULL, sizeof(z_stream));
         strm->zfree = ZFREE;
         strm->zalloc = ZALLOC;
         strm->opaque = OPAQUE;
-        if (deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) !=
-                         Z_OK)
-            bail("not enough memory", "");
+        ret = deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+        if (ret == Z_MEM_ERROR)
+            throw(ENOMEM, "not enough memory");
+        if (ret != Z_OK)
+            throw(EINVAL, "internal error");
     }
 
     /* write header */
@@ -2219,17 +2247,24 @@ local void single_compress(int reset)
 local void load_read(void *dummy)
 {
     size_t len;
+    ball_t err;                     /* error information from throw() */
 
     (void)dummy;
 
     Trace(("-- launched decompress read thread"));
-    do {
-        possess(g.load_state);
-        wait_for(g.load_state, TO_BE, 1);
-        g.in_len = len = readn(g.ind, g.in_which ? g.in_buf : g.in_buf2, BUF);
-        Trace(("-- decompress read thread read %lu bytes", len));
-        twist(g.load_state, TO, 0);
-    } while (len == BUF);
+    try {
+        do {
+            possess(g.load_state);
+            wait_for(g.load_state, TO_BE, 1);
+            g.in_len = len = readn(g.ind, g.in_which ? g.in_buf : g.in_buf2,
+                                   BUF);
+            Trace(("-- decompress read thread read %lu bytes", len));
+            twist(g.load_state, TO, 0);
+        } while (len == BUF);
+    }
+    catch (err) {
+        THREADABORT(err);
+    }
     Trace(("-- exited decompress read thread"));
 }
 #endif
@@ -2482,9 +2517,7 @@ local int get_header(int save)
         fname = GET2();
         extra = GET2();
         if (save) {
-            char *next = g.hname = MALLOC(fname + 1);
-            if (g.hname == NULL)
-                bail("not enough memory", "");
+            char *next = g.hname = alloc(NULL, fname + 1);
             while (fname > g.in_left) {
                 memcpy(next, g.in_next, g.in_left);
                 fname -= g.in_left;
@@ -2709,7 +2742,7 @@ local void list_info(void)
     if (method < 0) {
         RELEASE(g.hname);
         if (method != -1 && g.verbosity > 1)
-            complain("%s not a compressed file -- skipping", g.inf);
+            complain("skipping: %s not a compressed file", g.inf);
         return;
     }
 
@@ -2760,7 +2793,7 @@ local void list_info(void)
     /* skip to end to get trailer (8 bytes), compute compressed length */
     if (g.in_short) {                   /* whole thing already read */
         if (g.in_left < 8) {
-            complain("%s not a valid gzip file -- skipping", g.inf);
+            complain("skipping: %s not a valid gzip file", g.inf);
             return;
         }
         g.in_tot = g.in_left - 8;       /* compressed size */
@@ -2779,7 +2812,7 @@ local void list_info(void)
         } while (g.in_left == BUF);     /* read until end */
         if (g.in_left < 8) {
             if (n + g.in_left < 8) {
-                complain("%s not a valid gzip file -- skipping", g.inf);
+                complain("skipping: %s not a valid gzip file", g.inf);
                 return;
             }
             if (g.in_left) {
@@ -2793,7 +2826,7 @@ local void list_info(void)
         g.in_tot -= at + 8;
     }
     if (g.in_tot < 2) {
-        complain("%s not a valid gzip file -- skipping", g.inf);
+        complain("skipping: %s not a valid gzip file", g.inf);
         return;
     }
 
@@ -2853,19 +2886,25 @@ local lock *outb_check_more;
 local void outb_write(void *dummy)
 {
     size_t len;
+    ball_t err;                     /* error information from throw() */
 
     (void)dummy;
 
     Trace(("-- launched decompress write thread"));
-    do {
-        possess(outb_write_more);
-        wait_for(outb_write_more, TO_BE, 1);
-        len = out_len;
-        if (len && g.decode == 1)
-            writen(g.outd, out_copy, len);
-        Trace(("-- decompress wrote %lu bytes", len));
-        twist(outb_write_more, TO, 0);
-    } while (len);
+    try {
+        do {
+            possess(outb_write_more);
+            wait_for(outb_write_more, TO_BE, 1);
+            len = out_len;
+            if (len && g.decode == 1)
+                writen(g.outd, out_copy, len);
+            Trace(("-- decompress wrote %lu bytes", len));
+            twist(outb_write_more, TO, 0);
+        } while (len);
+    }
+    catch (err) {
+        THREADABORT(err);
+    }
     Trace(("-- exited decompress write thread"));
 }
 
@@ -2873,18 +2912,24 @@ local void outb_write(void *dummy)
 local void outb_check(void *dummy)
 {
     size_t len;
+    ball_t err;                     /* error information from throw() */
 
     (void)dummy;
 
     Trace(("-- launched decompress check thread"));
-    do {
-        possess(outb_check_more);
-        wait_for(outb_check_more, TO_BE, 1);
-        len = out_len;
-        g.out_check = CHECK(g.out_check, out_copy, len);
-        Trace(("-- decompress checked %lu bytes", len));
-        twist(outb_check_more, TO, 0);
-    } while (len);
+    try {
+        do {
+            possess(outb_check_more);
+            wait_for(outb_check_more, TO_BE, 1);
+            len = out_len;
+            g.out_check = CHECK(g.out_check, out_copy, len);
+            Trace(("-- decompress checked %lu bytes", len));
+            twist(outb_check_more, TO, 0);
+        } while (len);
+    }
+    catch (err) {
+        THREADABORT(err);
+    }
     Trace(("-- exited decompress check thread"));
 }
 #endif
@@ -2972,18 +3017,25 @@ local void infchk(void)
         strm.zfree = ZFREE;
         strm.opaque = OPAQUE;
         ret = inflateBackInit(&strm, 15, out_buf);
+        if (ret == Z_MEM_ERROR)
+            throw(ENOMEM, "not enough memory");
         if (ret != Z_OK)
-            bail("not enough memory", "");
+            throw(EINVAL, "internal error");
 
         /* decompress, compute lengths and check value */
         strm.avail_in = g.in_left;
         strm.next_in = g.in_next;
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
+        inflateBackEnd(&strm);
+        if (ret == Z_DATA_ERROR)
+            throw(EFTYPE, "%s: corrupted -- invalid deflate data (%s)",
+                  g.inf, strm.msg);
+        if (ret == Z_BUF_ERROR)
+            throw(EFTYPE, "%s: corrupted -- incomplete deflate data", g.inf);
         if (ret != Z_STREAM_END)
-            bail("corrupted input -- invalid deflate data: ", g.inf);
+            throw(EINVAL, "internal error");
         g.in_left = strm.avail_in;
         g.in_next = strm.next_in;
-        inflateBackEnd(&strm);
         outb(NULL, NULL, 0);        /* finish off final write and check */
 
         /* compute compressed data length */
@@ -2997,12 +3049,14 @@ local void infchk(void)
                 g.zip_clen = GET4();
                 g.zip_ulen = GET4();
                 if (g.in_eof)
-                    bail("corrupted zip entry -- missing trailer: ", g.inf);
+                    throw(EFTYPE, "%s: corrupted entry -- missing trailer",
+                          g.inf);
 
                 /* if crc doesn't match, try info-zip variant with sig */
                 if (g.zip_crc != g.out_check) {
                     if (g.zip_crc != 0x08074b50UL || g.zip_clen != g.out_check)
-                        bail("corrupted zip entry -- crc32 mismatch: ", g.inf);
+                        throw(EFTYPE, "%s: corrupted entry -- crc32 mismatch",
+                              g.inf);
                     g.zip_crc = g.zip_clen;
                     g.zip_clen = g.zip_ulen;
                     g.zip_ulen = GET4();
@@ -3024,11 +3078,13 @@ local void infchk(void)
                     (void)GET4();
                 }
                 if (g.in_eof)
-                    bail("corrupted zip entry -- missing trailer: ", g.inf);
+                    throw(EFTYPE, "%s: corrupted entry -- missing trailer",
+                          g.inf);
             }
             if (g.zip_clen != (clen & LOW32) ||
                 g.zip_ulen != (g.out_tot & LOW32))
-                bail("corrupted zip entry -- length mismatch: ", g.inf);
+                throw(EFTYPE, "%s: corrupted entry -- length mismatch",
+                      g.inf);
             check = g.zip_crc;
         }
         else if (g.form == 1) {     /* zlib (big-endian) trailer */
@@ -3037,19 +3093,19 @@ local void infchk(void)
             check += (unsigned)(GET()) << 8;
             check += GET();
             if (g.in_eof)
-                bail("corrupted zlib stream -- missing trailer: ", g.inf);
+                throw(EFTYPE, "%s: corrupted -- missing trailer", g.inf);
             if (check != g.out_check)
-                bail("corrupted zlib stream -- adler32 mismatch: ", g.inf);
+                throw(EFTYPE, "%s: corrupted -- adler32 mismatch", g.inf);
         }
         else {                      /* gzip trailer */
             check = GET4();
             len = GET4();
             if (g.in_eof)
-                bail("corrupted gzip stream -- missing trailer: ", g.inf);
+                throw(EFTYPE, "%s: corrupted -- missing trailer", g.inf);
             if (check != g.out_check)
-                bail("corrupted gzip stream -- crc32 mismatch: ", g.inf);
+                throw(EFTYPE, "%s: corrupted -- crc32 mismatch", g.inf);
             if (len != (g.out_tot & LOW32))
-                bail("corrupted gzip stream -- length mismatch: ", g.inf);
+                throw(EFTYPE, "%s: corrupted -- length mismatch", g.inf);
         }
 
         /* show file information if requested */
@@ -3069,9 +3125,9 @@ local void infchk(void)
         !g.list)
         cat();
     else if (was > 1 && get_header(0) != -5)
-        complain("entries after the first in %s were ignored", g.inf);
+        complain("warning: %s: entries after the first were ignored", g.inf);
     else if ((was == 0 && ret != -1) || (was == 1 && (GET(), !g.in_eof)))
-        complain("%s OK, has trailing junk which was ignored", g.inf);
+        complain("warning: %s: trailing junk was ignored", g.inf);
 }
 
 /* --- decompress Unix compress (LZW) input --- */
@@ -3110,13 +3166,13 @@ local void unlzw(void)
     /* process remainder of compress header -- a flags byte */
     g.out_tot = 0;
     if (NOMORE())
-        bail("lzw premature end: ", g.inf);
+        throw(EFTYPE, "%s: lzw premature end", g.inf);
     flags = NEXT();
     if (flags & 0x60)
-        bail("unknown lzw flags set: ", g.inf);
+        throw(EFTYPE, "%s: unknown lzw flags set", g.inf);
     max = flags & 0x1f;
     if (max < 9 || max > 16)
-        bail("lzw bits out of range: ", g.inf);
+        throw(EFTYPE, "%s: lzw bits out of range", g.inf);
     if (max == 9)                           /* 9 doesn't really mean 9 */
         max = 10;
     flags &= 0x80;                          /* true if block compress */
@@ -3135,13 +3191,13 @@ local void unlzw(void)
         return;
     buf = NEXT();
     if (NOMORE())
-        bail("lzw premature end: ", g.inf); /* need at least nine bits */
+        throw(EFTYPE, "%s: lzw premature end", g.inf);  /* need nine bits */
     buf += NEXT() << 8;
     final = prev = buf & mask;              /* code */
     buf >>= bits;
     left = 16 - bits;
     if (prev > 255)
-        bail("invalid lzw code: ", g.inf);
+        throw(EFTYPE, "%s: invalid lzw code", g.inf);
     out_buf[0] = final;                     /* write first decompressed byte */
     outcnt = 1;
 
@@ -3185,7 +3241,7 @@ local void unlzw(void)
         left += 8;
         if (left < bits) {
             if (NOMORE())
-                bail("lzw premature end: ", g.inf);
+                throw(EFTYPE, "%s: lzw premature end", g.inf);
             buf += (bits_t)(NEXT()) << left;
             left += 8;
         }
@@ -3229,7 +3285,7 @@ local void unlzw(void)
                    code we drop through (prev) will be a valid index so that
                    random input does not cause an exception. */
                 if (code != end + 1 || prev > end)
-                    bail("invalid lzw code: ", g.inf);
+                    throw(EFTYPE, "%s: invalid lzw code", g.inf);
                 match[stack++] = final;
                 code = prev;
             }
@@ -3330,6 +3386,7 @@ local void process(char *path)
     int method = -1;                /* get_header() return value */
     size_t len;                     /* length of base name (minus suffix) */
     struct stat st;                 /* to get file type and mod time */
+    ball_t err;                     /* error information from throw() */
     /* all compressed suffixes for decoding search, in length order */
     static char *sufs[] = {".z", "-z", "_z", ".Z", ".gz", "-gz", ".zz", "-zz",
                            ".zip", ".ZIP", ".tgz", NULL};
@@ -3363,12 +3420,12 @@ local void process(char *path)
             }
 #ifdef EOVERFLOW
             if (errno == EOVERFLOW || errno == EFBIG)
-                bail(g.inf,
-                    " too large -- not compiled with large file support");
+                throw(EFTYPE, "%s too large -- "
+                      "not compiled with large file support", g.inf);
 #endif
             if (errno) {
                 g.inf[len] = 0;
-                complain("%s does not exist -- skipping", g.inf);
+                complain("skipping: %s does not exist", g.inf);
                 return;
             }
             len = strlen(g.inf);
@@ -3379,15 +3436,15 @@ local void process(char *path)
         if ((st.st_mode & S_IFMT) != S_IFREG &&
             (st.st_mode & S_IFMT) != S_IFLNK &&
             (st.st_mode & S_IFMT) != S_IFDIR) {
-            complain("%s is a special file or device -- skipping", g.inf);
+            complain("skipping: %s is a special file or device", g.inf);
             return;
         }
         if ((st.st_mode & S_IFMT) == S_IFLNK && !g.force && !g.pipeout) {
-            complain("%s is a symbolic link -- skipping", g.inf);
+            complain("skipping: %s is a symbolic link", g.inf);
             return;
         }
         if ((st.st_mode & S_IFMT) == S_IFDIR && !g.recurse) {
-            complain("%s is a directory -- skipping", g.inf);
+            complain("skipping: %s is a directory", g.inf);
             return;
         }
 
@@ -3430,7 +3487,7 @@ local void process(char *path)
         /* don't compress .gz (or provided suffix) files, unless -f */
         if (!(g.force || g.list || g.decode) && len >= strlen(g.sufx) &&
                 strcmp(g.inf + len - strlen(g.sufx), g.sufx) == 0) {
-            complain("%s ends with %s -- skipping", g.inf, g.sufx);
+            complain("skipping: %s ends with %s", g.inf, g.sufx);
             return;
         }
 
@@ -3438,7 +3495,7 @@ local void process(char *path)
         if (g.decode == 1 && !g.pipeout && !g.list) {
             int suf = compressed_suffix(g.inf);
             if (suf == 0) {
-                complain("%s does not have compressed suffix -- skipping",
+                complain("skipping: %s does not have compressed suffix",
                          g.inf);
                 return;
             }
@@ -3448,7 +3505,7 @@ local void process(char *path)
         /* open input file */
         g.ind = open(g.inf, O_RDONLY, 0);
         if (g.ind < 0)
-            bail("read error on ", g.inf);
+            throw(errno, "read error on %s (%s)", g.inf, strerror(errno));
 
         /* prepare gzip header information for compression */
         g.name = g.headis & 1 ? justname(g.inf) : NULL;
@@ -3469,22 +3526,30 @@ local void process(char *path)
             if (g.ind != 0)
                 close(g.ind);
             if (method != -1)
-                complain(method < 0 ? "%s is not compressed -- skipping" :
-                         "%s has unknown compression method -- skipping",
+                complain(method < 0 ? "skipping: %s is not compressed" :
+                         "skipping: %s has unknown compression method",
                          g.inf);
             return;
         }
 
         /* if requested, test input file (possibly a special list) */
         if (g.decode == 2) {
-            if (method == 8)
-                infchk();
-            else {
-                unlzw();
-                if (g.list) {
-                    g.in_tot -= 3;
-                    show_info(method, 0, g.out_tot, 0);
+            try {
+                if (method == 8)
+                    infchk();
+                else {
+                    unlzw();
+                    if (g.list) {
+                        g.in_tot -= 3;
+                        show_info(method, 0, g.out_tot, 0);
+                    }
                 }
+            }
+            catch (err) {
+                if (err.code != EFTYPE)
+                    punt(err);
+                complain("skipping: %s", err.why);
+                drop(err);
             }
             RELEASE(g.hname);
             if (g.ind != 0)
@@ -3505,14 +3570,12 @@ local void process(char *path)
     /* create output file out, descriptor outd */
     if (path == NULL || g.pipeout) {
         /* write to stdout */
-        g.outf = MALLOC(strlen("<stdout>") + 1);
-        if (g.outf == NULL)
-            bail("not enough memory", "");
+        g.outf = alloc(NULL, strlen("<stdout>") + 1);
         strcpy(g.outf, "<stdout>");
         g.outd = 1;
         if (!g.decode && !g.force && isatty(g.outd))
-            bail("trying to write compressed data to a terminal",
-                 " (use -f to force)");
+            throw(EINVAL, "trying to write compressed data to a terminal"
+                          " (use -f to force)");
     }
     else {
         char *to = g.inf, *sufx = "";
@@ -3536,9 +3599,7 @@ local void process(char *path)
             sufx = g.sufx;
 
         /* create output file and open to write */
-        g.outf = MALLOC(pre + len + strlen(sufx) + 1);
-        if (g.outf == NULL)
-            bail("not enough memory", "");
+        g.outf = alloc(NULL, pre + len + strlen(sufx) + 1);
         memcpy(g.outf, g.inf, pre);
         memcpy(g.outf + pre, to, len);
         strcpy(g.outf + pre + len, sufx);
@@ -3564,7 +3625,7 @@ local void process(char *path)
 
         /* if exists and no overwrite, report and go on to next */
         if (g.outd < 0 && errno == EEXIST) {
-            complain("%s exists -- skipping", g.outf);
+            complain("skipping: %s exists", g.outf);
             RELEASE(g.outf);
             RELEASE(g.hname);
             if (g.ind != 0)
@@ -3574,7 +3635,7 @@ local void process(char *path)
 
         /* if some other error, give up */
         if (g.outd < 0)
-            bail("write error on ", g.outf);
+            throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
     }
     SET_BINARY_MODE(g.outd);
     RELEASE(g.hname);
@@ -3583,12 +3644,20 @@ local void process(char *path)
     if (g.verbosity > 1)
         fprintf(stderr, "%s to %s ", g.inf, g.outf);
     if (g.decode) {
-        if (method == 8)
-            infchk();
-        else if (method == 257)
-            unlzw();
-        else
-            cat();
+        try {
+            if (method == 8)
+                infchk();
+            else if (method == 257)
+                unlzw();
+            else
+                cat();
+        }
+        catch (err) {
+            if (err.code != EFTYPE)
+                punt(err);
+            complain("skipping: %s", err.why);
+            drop(err);
+        }
     }
 #ifndef NOTHREAD
     else if (g.procs > 1)
@@ -3606,7 +3675,7 @@ local void process(char *path)
         close(g.ind);
     if (g.outd != 1) {
         if (close(g.outd))
-            bail("write error on ", g.outf);
+            throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
         g.outd = -1;            /* now prevent deletion on interrupt */
         if (g.ind != 0) {
             copymeta(g.inf, g.outf);
@@ -3768,11 +3837,11 @@ local size_t num(char *arg)
     size_t val = 0;
 
     if (*str == 0)
-        bail("internal error: empty parameter", "");
+        throw(EINVAL, "internal error: empty parameter");
     do {
         if (*str < '0' || *str > '9' ||
             (val && ((~(size_t)0) - (*str - '0')) / val < 10))
-            bail("invalid numeric parameter: ", arg);
+            throw(EINVAL, "invalid numeric parameter: %s", arg);
         val = val * 10 + (*str - '0');
     } while (*++str);
     return val;
@@ -3787,7 +3856,7 @@ local int option(char *arg)
     /* if no argument or dash option, check status of get */
     if (get && (arg == NULL || *arg == '-')) {
         bad[1] = "bpSIM"[get - 1];
-        bail("missing parameter after ", bad);
+        throw(EINVAL, "missing parameter after %s", bad);
     }
     if (arg == NULL)
         return 0;
@@ -3809,7 +3878,7 @@ local int option(char *arg)
                     break;
                 }
             if (j < 0)
-                bail("invalid option: ", arg - 2);
+                throw(EINVAL, "invalid option: %s", arg - 2);
         }
 
         /* process short options (more than one allowed after dash) */
@@ -3818,7 +3887,8 @@ local int option(char *arg)
                options until we have the parameter */
             if (get) {
                 if (get == 3)
-                    bail("invalid usage: -s must be followed by space", "");
+                    throw(EINVAL, "invalid usage: "
+                                  "-s must be followed by space");
                 break;      /* allow -pnnn and -bnnn, fall to parameter code */
             }
 
@@ -3830,11 +3900,11 @@ local int option(char *arg)
                 g.level = *arg - '0';
                 while (arg[1] >= '0' && arg[1] <= '9') {
                     if (g.level && (INT_MAX - (arg[1] - '0')) / g.level < 10)
-                        bail("only levels 0..9 and 11 are allowed", "");
+                        throw(EINVAL, "only levels 0..9 and 11 are allowed");
                     g.level = g.level * 10 + *++arg - '0';
                 }
                 if (g.level == 10 || g.level > 11)
-                    bail("only levels 0..9 and 11 are allowed", "");
+                    throw(EINVAL, "only levels 0..9 and 11 are allowed");
                 new_opts();
                 break;
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
@@ -3857,9 +3927,11 @@ local int option(char *arg)
             case 'T':  g.headis &= ~0xa;  break;
             case 'V':  fputs(VERSION, stderr);  exit(0);
             case 'Z':
-                bail("invalid option: LZW output not supported: ", bad);
+                throw(EINVAL, "invalid option: LZW output not supported: %s",
+                      bad);
             case 'a':
-                bail("invalid option: ascii conversion not supported: ", bad);
+                throw(EINVAL, "invalid option: no ascii conversion: %s",
+                      bad);
             case 'b':  get = 1;  break;
             case 'c':  g.pipeout = 1;  break;
             case 'd':  if (!g.decode) g.headis >>= 2;  g.decode = 1;  break;
@@ -3876,7 +3948,7 @@ local int option(char *arg)
             case 'v':  g.verbosity++;  break;
             case 'z':  g.form = 1;  g.sufx = ".zz";  break;
             default:
-                bail("invalid option: ", bad);
+                throw(EINVAL, "invalid option: %s", bad);
             }
         } while (*++arg);
         if (*arg == 0)
@@ -3891,24 +3963,24 @@ local int option(char *arg)
             n = num(arg);
             g.block = n << 10;                  /* chunk size */
             if (g.block < DICT)
-                bail("block size too small (must be >= 32K)", "");
+                throw(EINVAL, "block size too small (must be >= 32K)");
             if (n != g.block >> 10 ||
                 OUTPOOL(g.block) < g.block ||
                 (ssize_t)OUTPOOL(g.block) < 0 ||
                 g.block > (1UL << 29))          /* limited by append_len() */
-                bail("block size too large: ", arg);
+                throw(EINVAL, "block size too large: %s", arg);
             new_opts();
         }
         else if (get == 2) {
             n = num(arg);
             g.procs = (int)n;                   /* # processes */
             if (g.procs < 1)
-                bail("invalid number of processes: ", arg);
+                throw(EINVAL, "invalid number of processes: %s", arg);
             if ((size_t)g.procs != n || INBUFS(g.procs) < 1)
-                bail("too many processes: ", arg);
+                throw(EINVAL, "too many processes: %s", arg);
 #ifdef NOTHREAD
             if (g.procs > 1)
-                bail("compiled without threads", "");
+                throw(EINVAL, "compiled without threads");
 #endif
             new_opts();
         }
@@ -3926,130 +3998,140 @@ local int option(char *arg)
     return 1;
 }
 
-/* catch termination signal */
-local void cut_short(int sig)
+#ifndef NOTHREAD
+/* handle error received from yarn function */
+local void cut_yarn(int err)
 {
-    (void)sig;
-    Trace(("termination by user"));
-    if (g.outd != -1 && g.outf != NULL)
-        unlink(g.outf);
-    log_dump();
-    _exit(1);
+    throw(err, err == ENOMEM ? "not enough memory" : "internal threads error");
 }
+#endif
 
-/* Process arguments, compress in the gzip format.  Note that procs must be at
-   least two in order to provide a dictionary in one work unit for the other
-   work unit, and that size must be at least 32K to store a full dictionary. */
+/* Process command line arguments. */
 int main(int argc, char **argv)
 {
     int n;                          /* general index */
     int noop;                       /* true to suppress option decoding */
     unsigned long done;             /* number of named files processed */
     char *opts, *p;                 /* environment default options, marker */
+    ball_t err;                     /* error information from throw() */
 
-    /* initialize globals */
-    g.inf = NULL;
-    g.inz = 0;
-    g.outf = NULL;
-    g.first = 1;
-    g.hname = NULL;
+    try {
+        /* initialize globals */
+        g.inf = NULL;
+        g.inz = 0;
+        g.outf = NULL;
+        g.first = 1;
+        g.hname = NULL;
 
-    /* save pointer to program name for error messages */
-    p = strrchr(argv[0], '/');
-    p = p == NULL ? argv[0] : p + 1;
-    g.prog = *p ? p : "pigz";
+        /* save pointer to program name for error messages */
+        p = strrchr(argv[0], '/');
+        p = p == NULL ? argv[0] : p + 1;
+        g.prog = *p ? p : "pigz";
 
-    /* prepare for interrupts and logging */
-    signal(SIGINT, cut_short);
+        /* prepare for interrupts and logging */
+        signal(SIGINT, cut_short);
 #ifndef NOTHREAD
-    yarn_prefix = g.prog;           /* prefix for yarn error messages */
-    yarn_abort = cut_short;         /* call on thread error */
+        yarn_prefix = g.prog;           /* prefix for yarn error messages */
+        yarn_abort = cut_yarn;          /* call on thread error */
 #endif
 #ifdef DEBUG
-    gettimeofday(&start, NULL);     /* starting time for log entries */
-    log_init();                     /* initialize logging */
+        gettimeofday(&start, NULL);     /* starting time for log entries */
+        log_init();                     /* initialize logging */
 #endif
 
-    /* set all options to defaults */
-    defaults();
+        /* set all options to defaults */
+        defaults();
 
-    /* process user environment variable defaults in GZIP */
-    opts = getenv("GZIP");
-    if (opts != NULL) {
-        while (*opts) {
-            while (*opts == ' ' || *opts == '\t')
-                opts++;
-            p = opts;
-            while (*p && *p != ' ' && *p != '\t')
-                p++;
-            n = *p;
-            *p = 0;
-            if (option(opts))
-                bail("cannot provide files in GZIP environment variable", "");
-            opts = p + (n ? 1 : 0);
-        }
-        option(NULL);
-    }
-
-    /* process user environment variable defaults in PIGZ as well */
-    opts = getenv("PIGZ");
-    if (opts != NULL) {
-        while (*opts) {
-            while (*opts == ' ' || *opts == '\t')
-                opts++;
-            p = opts;
-            while (*p && *p != ' ' && *p != '\t')
-                p++;
-            n = *p;
-            *p = 0;
-            if (option(opts))
-                bail("cannot provide files in PIGZ environment variable", "");
-            opts = p + (n ? 1 : 0);
-        }
-        option(NULL);
-    }
-
-    /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
-    if (strcmp(g.prog, "unpigz") == 0 || strcmp(g.prog, "gunzip") == 0) {
-        if (!g.decode)
-            g.headis >>= 2;
-        g.decode = 1;
-    }
-    if ((n = strlen(g.prog)) > 2 && strcmp(g.prog + n - 3, "cat") == 0) {
-        if (!g.decode)
-            g.headis >>= 2;
-        g.decode = 1;
-        g.pipeout = 1;
-    }
-
-    /* if no arguments and compressed data to or from a terminal, show help */
-    if (argc < 2 && isatty(g.decode ? 0 : 1))
-        help();
-
-    /* process command-line arguments, no options after "--" */
-    done = noop = 0;
-    for (n = 1; n < argc; n++)
-        if (noop == 0 && strcmp(argv[n], "--") == 0) {
-            noop = 1;
+        /* process user environment variable defaults in GZIP */
+        opts = getenv("GZIP");
+        if (opts != NULL) {
+            while (*opts) {
+                while (*opts == ' ' || *opts == '\t')
+                    opts++;
+                p = opts;
+                while (*p && *p != ' ' && *p != '\t')
+                    p++;
+                n = *p;
+                *p = 0;
+                if (option(opts))
+                    throw(EINVAL, "cannot provide files in "
+                                  "GZIP environment variable");
+                opts = p + (n ? 1 : 0);
+            }
             option(NULL);
         }
-        else if (noop || option(argv[n])) { /* true if file name, process it */
-            if (done == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
-                complain("warning: output will be concatenated zip files -- "
-                         "will not be able to extract");
-            process(strcmp(argv[n], "-") ? argv[n] : NULL);
-            done++;
+
+        /* process user environment variable defaults in PIGZ as well */
+        opts = getenv("PIGZ");
+        if (opts != NULL) {
+            while (*opts) {
+                while (*opts == ' ' || *opts == '\t')
+                    opts++;
+                p = opts;
+                while (*p && *p != ' ' && *p != '\t')
+                    p++;
+                n = *p;
+                *p = 0;
+                if (option(opts))
+                    throw(EINVAL, "cannot provide files in "
+                                  "PIGZ environment variable");
+                opts = p + (n ? 1 : 0);
+            }
+            option(NULL);
         }
-    option(NULL);
 
-    /* list stdin or compress stdin to stdout if no file names provided */
-    if (done == 0)
-        process(NULL);
+        /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
+        if (strcmp(g.prog, "unpigz") == 0 || strcmp(g.prog, "gunzip") == 0) {
+            if (!g.decode)
+                g.headis >>= 2;
+            g.decode = 1;
+        }
+        if ((n = strlen(g.prog)) > 2 && strcmp(g.prog + n - 3, "cat") == 0) {
+            if (!g.decode)
+                g.headis >>= 2;
+            g.decode = 1;
+            g.pipeout = 1;
+        }
 
-    /* done -- release resources, show log */
-    RELEASE(g.inf);
-    g.inz = 0;
-    new_opts();
+        /* if no arguments and compressed data to/from terminal, show help */
+        if (argc < 2 && isatty(g.decode ? 0 : 1))
+            help();
+
+        /* process command-line arguments */
+        done = noop = 0;
+        for (n = 1; n < argc; n++)
+            /* ignore options after "--" */
+            if (noop == 0 && strcmp(argv[n], "--") == 0) {
+                noop = 1;
+                option(NULL);
+            }
+            /* process argument, interpreting if option */
+            else if (noop || option(argv[n])) {
+                /* argv[n] is a name to process */
+                if (done == 1 && g.pipeout && !g.decode && !g.list &&
+                    g.form > 1)
+                    complain("warning: output will be concatenated zip files"
+                             " -- %s will not be able to extract", g.prog);
+                process(strcmp(argv[n], "-") ? argv[n] : NULL);
+                done++;
+            }
+        option(NULL);
+
+        /* list stdin or compress stdin to stdout if no file names provided */
+        if (done == 0)
+            process(NULL);
+    }
+    always {
+        /* release resources */
+        RELEASE(g.inf);
+        g.inz = 0;
+        new_opts();
+    }
+    catch (err) {
+        THREADABORT(err);
+    }
+
+    /* show log (if any) */
     log_dump();
     return 0;
 }

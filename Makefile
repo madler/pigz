@@ -4,13 +4,15 @@ LDFLAGS=-lz
 ZOPFLI=zopfli/src/zopfli/
 # use gcc and gmake on Solaris
 
-pigz: pigz.o yarn.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
+pigz: pigz.o yarn.o try.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lm
 	ln -f pigz unpigz
 
-pigz.o: pigz.c yarn.h ${ZOPFLI}deflate.h ${ZOPFLI}util.h
+pigz.o: pigz.c yarn.h try.h ${ZOPFLI}deflate.h ${ZOPFLI}util.h
 
 yarn.o: yarn.c yarn.h
+
+try.o: try.c try.h
 
 ${ZOPFLI}deflate.o: ${ZOPFLI}deflate.c ${ZOPFLI}deflate.h ${ZOPFLI}blocksplitter.h ${ZOPFLI}lz77.h ${ZOPFLI}squeeze.h ${ZOPFLI}tree.h ${ZOPFLI}zopfli.h ${ZOPFLI}cache.h ${ZOPFLI}hash.h ${ZOPFLI}util.h
 
@@ -32,20 +34,23 @@ ${ZOPFLI}katajainen.o: ${ZOPFLI}katajainen.c ${ZOPFLI}katajainen.h
 
 dev: pigz pigzt pigzn
 
-pigzt: pigzt.o yarnt.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
+pigzt: pigzt.o yarnt.o try.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigzt $^ -lpthread -lm
 
-pigzt.o: pigz.c yarn.h
+pigzt.o: pigz.c yarn.h try.h
 	$(CC) $(CFLAGS) -DDEBUG -g -c -o pigzt.o pigz.c
 
 yarnt.o: yarn.c yarn.h
 	$(CC) $(CFLAGS) -DDEBUG -g -c -o yarnt.o yarn.c
 
-pigzn: pigzn.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
+pigzn: pigzn.o tryn.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigzn $^ -lm
 
-pigzn.o: pigz.c
+pigzn.o: pigz.c try.h
 	$(CC) $(CFLAGS) -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
+
+tryn.o: try.c try.h
+	$(CC) $(CFLAGS) -DDEBUG -DNOTHREAD -g -c -o tryn.o try.c
 
 test: pigz
 	./pigz -kf pigz.c ; ./pigz -t pigz.c.gz
