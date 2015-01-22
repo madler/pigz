@@ -2362,8 +2362,27 @@ local void in_init(void)
         while (togo > g.in_left) { \
             togo -= g.in_left; \
             if (load() == 0) \
-                return -1; \
+                return -3; \
         } \
+        g.in_left -= togo; \
+        g.in_next += togo; \
+    } while (0)
+
+/* GET(), GET2(), GET4() and SKIP() equivalents, with crc update */
+#define GETC() (g.in_left == 0 && (g.in_eof || load() == 0) ? 0 : \
+                (g.in_left--, crc = crc32(crc, g.in_next, 1), *g.in_next++))
+#define GET2C() (tmp2 = GETC(), tmp2 + ((unsigned)(GETC()) << 8))
+#define GET4C() (tmp4 = GET2C(), tmp4 + ((unsigned long)(GET2C()) << 16))
+#define SKIPC(dist) \
+    do { \
+        size_t togo = (dist); \
+        while (togo > g.in_left) { \
+            crc = crc32(crc, g.in_next, g.in_left); \
+            togo -= g.in_left; \
+            if (load() == 0) \
+                return -3; \
+        } \
+        crc = crc32(crc, g.in_next, togo); \
         g.in_left -= togo; \
         g.in_next += togo; \
     } while (0)
@@ -2455,9 +2474,10 @@ local int read_extra(unsigned len, int save)
    range 0..256 (256 implies a zip method greater than 255), or on error return
    negative: -1 is immediate EOF, -2 is not a recognized compressed format, -3
    is premature EOF within the header, -4 is unexpected header flag values, -5
-   is the zip central directory; a method of 257 is lzw -- if the return value
-   is not negative, then get_header() sets g.form to indicate gzip (0), zlib
-   (1), or zip (2, or 3 if the entry is followed by a data descriptor) */
+   is the zip central directory, -6 is a failed gzip header crc check; a method
+   of 257 is lzw -- if the return value is not negative, then get_header() sets
+   g.form to indicate gzip (0), zlib (1), or zip (2, or 3 if the entry is
+   followed by a data descriptor) */
 local int get_header(int save)
 {
     unsigned magic;             /* magic header */
@@ -2466,6 +2486,7 @@ local int get_header(int save)
     unsigned fname, extra;      /* name and extra field lengths */
     unsigned tmp2;              /* for macro */
     unsigned long tmp4;         /* for macro */
+    unsigned long crc;          /* gzip header crc */
 
     /* clear return information */
     if (save) {
@@ -2482,9 +2503,10 @@ local int get_header(int save)
     magic += GET();
     if (g.in_eof)
         return -2;
-    if (magic % 31 == 0) {          /* it's zlib */
+    if (magic % 31 == 0 && (magic & 0x8f20) == 0x0800) {
+        /* it's zlib */
         g.form = 1;
-        return (int)((magic >> 8) & 0xf);
+        return 8;
     }
     if (magic == 0x1f9d)            /* it's lzw */
         return 257;
@@ -2498,15 +2520,11 @@ local int get_header(int save)
             return -4;              /* not a local header */
         SKIP(2);
         flags = GET2();
-        if (g.in_eof)
-            return -3;
         if (flags & 0xfff0)
             return -4;
         method = GET();             /* return low byte of method or 256 */
         if (GET() != 0 || flags & 1)
             method = 256;           /* unknown or encrypted */
-        if (g.in_eof)
-            return -3;
         if (save)
             g.stamp = dos2time(GET4());
         else
@@ -2517,7 +2535,11 @@ local int get_header(int save)
         fname = GET2();
         extra = GET2();
         if (save) {
-            char *next = g.hname = alloc(NULL, fname + 1);
+            char *next;
+
+            if (g.in_eof)
+                return -3;
+            next = g.hname = alloc(NULL, fname + 1);
             while (fname > g.in_left) {
                 memcpy(next, g.in_next, g.in_left);
                 fname -= g.in_left;
@@ -2544,35 +2566,29 @@ local int get_header(int save)
     }
 
     /* it's gzip -- get method and flags */
-    method = GET();
-    flags = GET();
-    if (g.in_eof)
-        return -1;
+    crc = 0xf6e946c9;       /* crc of 0x1f 0x8b */
+    method = GETC();
+    flags = GETC();
     if (flags & 0xe0)
         return -4;
 
     /* get time stamp */
     if (save)
-        g.stamp = tolong(GET4());
+        g.stamp = tolong(GET4C());
     else
-        SKIP(4);
+        SKIPC(4);
 
     /* skip extra field and OS */
-    SKIP(2);
+    SKIPC(2);
 
     /* skip extra field, if present */
-    if (flags & 4) {
-        extra = GET2();
-        if (g.in_eof)
-            return -3;
-        SKIP(extra);
-    }
+    if (flags & 4)
+        SKIPC(GET2C());
 
     /* read file name, if present, into allocated memory */
     if ((flags & 8) && save) {
         unsigned char *end;
         size_t copy, have, size = 0;
-        g.hname = NULL;
         have = 0;
         do {
             if (g.in_left == 0 && load() == 0)
@@ -2583,25 +2599,24 @@ local int get_header(int save)
             g.in_left -= copy;
             g.in_next += copy;
         } while (end == NULL);
+        crc = crc32(crc, (unsigned char *)g.hname, have);
     }
     else if (flags & 8)
-        while (GET() != 0)
-            if (g.in_eof)
-                return -3;
+        while (GETC() != 0)
+            ;
 
     /* skip comment */
     if (flags & 16)
-        while (GET() != 0)
-            if (g.in_eof)
-                return -3;
+        while (GETC() != 0)
+            ;
 
-    /* skip header crc */
-    if (flags & 2)
-        SKIP(2);
+    /* check header crc */
+    if ((flags & 2) && GET2() != (crc & 0xffff))
+        return -6;
 
     /* return gzip compression method */
     g.form = 0;
-    return method;
+    return g.in_eof ? -3 : method;
 }
 
 /* --- list contents of compressed input (gzip, zlib, or lzw) */
@@ -2742,7 +2757,8 @@ local void list_info(void)
     if (method < 0) {
         RELEASE(g.hname);
         if (method != -1 && g.verbosity > 1)
-            complain("skipping: %s not a compressed file", g.inf);
+            complain(method != -6 ? "skipping: %s not compressed" :
+                     "skipping: %s corrupted: invalid header crc", g.inf);
         return;
     }
 
@@ -3514,7 +3530,7 @@ local void process(char *path)
     SET_BINARY_MODE(g.ind);
 
     /* if decoding or testing, try to read gzip header */
-    g.hname = NULL;
+    RELEASE(g.hname);
     if (g.decode) {
         in_init();
         method = get_header(1);
@@ -3526,9 +3542,10 @@ local void process(char *path)
             if (g.ind != 0)
                 close(g.ind);
             if (method != -1)
-                complain(method < 0 ? "skipping: %s is not compressed" :
-                         "skipping: %s has unknown compression method",
-                         g.inf);
+                complain(method < 0 ?
+                            method != -6 ? "skipping: %s is not compressed" :
+                                "skipping: %s corrupted: invalid header crc" :
+                         "skipping: %s has unknown compression method", g.inf);
             return;
         }
 
