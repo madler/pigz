@@ -3912,9 +3912,7 @@ local int option(char *arg)
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013"
-                      " Mark Adler\n",
-                      stderr);
+                fputs("Copyright (C) 2007-2015 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
