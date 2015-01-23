@@ -811,9 +811,11 @@ local void cut_short(int sig)
 {
     if (sig == SIGINT)
         Trace(("termination by user"));
-    if (g.outd != -1 && g.outf != NULL)
+    if (g.outd != -1 && g.outd != 1) {
         unlink(g.outf);
-    RELEASE(g.outf);
+        RELEASE(g.outf);
+        g.outd = -1;
+    }
     log_dump();
     _exit(sig < 0 ? -sig : ECANCELED);
 }
@@ -2983,9 +2985,15 @@ local int outb(void *desc, unsigned char *buf, unsigned len)
 
         /* if requested with len == 0, clean up -- terminate and join write and
            check threads, free lock */
-        if (len == 0) {
-            join(ch);
-            join(wr);
+        if (len == 0 && outb_write_more != NULL) {
+            if (desc != NULL) {
+                destruct(ch);
+                destruct(wr);
+            }
+            else {
+                join(ch);
+                join(wr);
+            }
             free_lock(outb_check_more);
             free_lock(outb_write_more);
             outb_write_more = NULL;
@@ -3549,7 +3557,7 @@ local void process(char *path)
             return;
         }
 
-        /* if requested, test input file (possibly a special list) */
+        /* if requested, test input file (possibly a test list) */
         if (g.decode == 2) {
             try {
                 if (method == 8)
@@ -3567,6 +3575,7 @@ local void process(char *path)
                     punt(err);
                 complain("skipping: %s", err.why);
                 drop(err);
+                outb(&g, NULL, 0);
             }
             RELEASE(g.hname);
             if (g.ind != 0)
@@ -3674,6 +3683,13 @@ local void process(char *path)
                 punt(err);
             complain("skipping: %s", err.why);
             drop(err);
+            outb(g.outf, NULL, 0);
+            if (g.outd != -1 && g.outd != 1) {
+                close(g.outd);
+                g.outd = -1;
+                unlink(g.outf);
+                RELEASE(g.outf);
+            }
         }
     }
 #ifndef NOTHREAD
@@ -3690,7 +3706,7 @@ local void process(char *path)
     /* finish up, copy attributes, set times, delete original */
     if (g.ind != 0)
         close(g.ind);
-    if (g.outd != 1) {
+    if (g.outd != -1 && g.outd != 1) {
         if (close(g.outd))
             throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
         g.outd = -1;            /* now prevent deletion on interrupt */
