@@ -3419,7 +3419,7 @@ local void touch(char *path, time_t t)
    call itself for recursive directory processing */
 local void process(char *path)
 {
-    int method = -1;                /* get_header() return value */
+    volatile int method = -1;       /* get_header() return value */
     size_t len;                     /* length of base name (minus suffix) */
     struct stat st;                 /* to get file type and mod time */
     ball_t err;                     /* error information from throw() */
