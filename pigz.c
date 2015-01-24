@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007-2015 Mark Adler
- * Version 2.3.2  xx Jan 2015  Mark Adler
+ * Version 2.3.2  24 Jan 2015  Mark Adler
  */
 
 /*
@@ -162,7 +162,17 @@
                        Update zopfli to Mar 10, 2013 Google state
                        Support zopfli in single thread case
                        Add -F, -I, -M, and -O options for zopfli tuning
-   2.3.2  xx Jan 2015  -
+   2.3.2  24 Jan 2015  Change whereis to which in Makefile for portability
+                       Return zero exit code when only warnings are issued
+                       Increase speed of unlzw (Unix compress decompression)
+                       Update zopfli to current google state
+                       Allow larger maximum blocksize (-b), now 512 MiB
+                       Do not require that -d precede -N, -n, -T options
+                       Strip any path from header name for -dN or -dNT
+                       Remove use of PATH_MAX (PATH_MAX is not reliable)
+                       Do not abort on inflate data error, do remaining files
+                       Check gzip header CRC if present
+                       Improve decompression error detection and reporting
  */
 
 #define VERSION "pigz 2.3.2\n"
@@ -206,12 +216,13 @@
    the --independent or -i option, so that the blocks can be decompressed
    independently for partial error recovery or for random access.
 
-   Decompression can't be parallelized, at least not without specially prepared
-   deflate streams for that purpose.  As a result, pigz uses a single thread
-   (the main thread) for decompression, but will create three other threads for
-   reading, writing, and check calculation, which can speed up decompression
-   under some circumstances.  Parallel decompression can be turned off by
-   specifying one process (-dp 1 or -tp 1).
+   Decompression can't be parallelized over an arbitrary number of processors
+   like compression can be, at least not without specially prepared deflate
+   streams for that purpose.  As a result, pigz uses a single thread (the main
+   thread) for decompression, but will create three other threads for reading,
+   writing, and check calculation, which can speed up decompression under some
+   circumstances.  Parallel decompression can be turned off by specifying one
+   process (-dp 1 or -tp 1).
 
    pigz requires zlib 1.2.1 or later to allow setting the dictionary when doing
    raw deflate.  Since zlib 1.2.3 corrects security vulnerabilities in zlib
@@ -247,7 +258,7 @@
    jobs until instructed to return.  When a job is pulled, the dictionary, if
    provided, will be loaded into the deflate engine and then that input buffer
    is dropped for reuse.  Then the input data is compressed into an output
-   buffer that grows in size if necessary to hold the compressed data. The job
+   buffer that grows in size if necessary to hold the compressed data.  The job
    is then put into the write job list, sorted by the sequence number. The
    compress thread however continues to calculate the check value on the input
    data, either a CRC-32 or Adler-32, possibly in parallel with the write
@@ -351,10 +362,10 @@
 
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(), */
                         /* deflateEnd(), deflateSetDictionary(), crc32(),
-                           inflateBackInit(), inflateBack(), inflateBackEnd(),
-                           Z_DEFAULT_COMPRESSION, Z_DEFAULT_STRATEGY,
-                           Z_DEFLATED, Z_NO_FLUSH, Z_NULL, Z_OK,
-                           Z_SYNC_FLUSH, z_stream */
+                           adler32(), inflateBackInit(), inflateBack(),
+                           inflateBackEnd(), Z_DEFAULT_COMPRESSION,
+                           Z_DEFAULT_STRATEGY, Z_DEFLATED, Z_NO_FLUSH, Z_NULL,
+                           Z_OK, Z_SYNC_FLUSH, z_stream */
 #if !defined(ZLIB_VERNUM) || ZLIB_VERNUM < 0x1230
 #  error Need zlib version 1.2.3 or later
 #endif
