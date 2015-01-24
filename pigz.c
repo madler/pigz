@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007-2015 Mark Adler
- * Version 2.3.2  24 Jan 2015  Mark Adler
+ * Version 2.3.3  24 Jan 2015  Mark Adler
  */
 
 /*
@@ -173,9 +173,11 @@
                        Do not abort on inflate data error, do remaining files
                        Check gzip header CRC if present
                        Improve decompression error detection and reporting
+   2.3.3  24 Jan 2015  Portability improvements
+                       Update copyright years in documentation
  */
 
-#define VERSION "pigz 2.3.2\n"
+#define VERSION "pigz 2.3.3\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
