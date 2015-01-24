@@ -820,8 +820,9 @@ local void log_dump(void)
 /* abort or catch termination signal */
 local void cut_short(int sig)
 {
-    if (sig == SIGINT)
+    if (sig == SIGINT) {
         Trace(("termination by user"));
+    }
     if (g.outd != -1 && g.outd != 1) {
         unlink(g.outf);
         RELEASE(g.outf);
