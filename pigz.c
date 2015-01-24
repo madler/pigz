@@ -3064,10 +3064,10 @@ local void infchk(void)
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         inflateBackEnd(&strm);
         if (ret == Z_DATA_ERROR)
-            throw(EFTYPE, "%s: corrupted -- invalid deflate data (%s)",
+            throw(EDOM, "%s: corrupted -- invalid deflate data (%s)",
                   g.inf, strm.msg);
         if (ret == Z_BUF_ERROR)
-            throw(EFTYPE, "%s: corrupted -- incomplete deflate data", g.inf);
+            throw(EDOM, "%s: corrupted -- incomplete deflate data", g.inf);
         if (ret != Z_STREAM_END)
             throw(EINVAL, "internal error");
         g.in_left = strm.avail_in;
@@ -3085,13 +3085,13 @@ local void infchk(void)
                 g.zip_clen = GET4();
                 g.zip_ulen = GET4();
                 if (g.in_eof)
-                    throw(EFTYPE, "%s: corrupted entry -- missing trailer",
+                    throw(EDOM, "%s: corrupted entry -- missing trailer",
                           g.inf);
 
                 /* if crc doesn't match, try info-zip variant with sig */
                 if (g.zip_crc != g.out_check) {
                     if (g.zip_crc != 0x08074b50UL || g.zip_clen != g.out_check)
-                        throw(EFTYPE, "%s: corrupted entry -- crc32 mismatch",
+                        throw(EDOM, "%s: corrupted entry -- crc32 mismatch",
                               g.inf);
                     g.zip_crc = g.zip_clen;
                     g.zip_clen = g.zip_ulen;
@@ -3114,12 +3114,12 @@ local void infchk(void)
                     (void)GET4();
                 }
                 if (g.in_eof)
-                    throw(EFTYPE, "%s: corrupted entry -- missing trailer",
+                    throw(EDOM, "%s: corrupted entry -- missing trailer",
                           g.inf);
             }
             if (g.zip_clen != (clen & LOW32) ||
                 g.zip_ulen != (g.out_tot & LOW32))
-                throw(EFTYPE, "%s: corrupted entry -- length mismatch",
+                throw(EDOM, "%s: corrupted entry -- length mismatch",
                       g.inf);
             check = g.zip_crc;
         }
@@ -3129,19 +3129,19 @@ local void infchk(void)
             check += (unsigned)(GET()) << 8;
             check += GET();
             if (g.in_eof)
-                throw(EFTYPE, "%s: corrupted -- missing trailer", g.inf);
+                throw(EDOM, "%s: corrupted -- missing trailer", g.inf);
             if (check != g.out_check)
-                throw(EFTYPE, "%s: corrupted -- adler32 mismatch", g.inf);
+                throw(EDOM, "%s: corrupted -- adler32 mismatch", g.inf);
         }
         else {                      /* gzip trailer */
             check = GET4();
             len = GET4();
             if (g.in_eof)
-                throw(EFTYPE, "%s: corrupted -- missing trailer", g.inf);
+                throw(EDOM, "%s: corrupted -- missing trailer", g.inf);
             if (check != g.out_check)
-                throw(EFTYPE, "%s: corrupted -- crc32 mismatch", g.inf);
+                throw(EDOM, "%s: corrupted -- crc32 mismatch", g.inf);
             if (len != (g.out_tot & LOW32))
-                throw(EFTYPE, "%s: corrupted -- length mismatch", g.inf);
+                throw(EDOM, "%s: corrupted -- length mismatch", g.inf);
         }
 
         /* show file information if requested */
@@ -3202,13 +3202,13 @@ local void unlzw(void)
     /* process remainder of compress header -- a flags byte */
     g.out_tot = 0;
     if (NOMORE())
-        throw(EFTYPE, "%s: lzw premature end", g.inf);
+        throw(EDOM, "%s: lzw premature end", g.inf);
     flags = NEXT();
     if (flags & 0x60)
-        throw(EFTYPE, "%s: unknown lzw flags set", g.inf);
+        throw(EDOM, "%s: unknown lzw flags set", g.inf);
     max = flags & 0x1f;
     if (max < 9 || max > 16)
-        throw(EFTYPE, "%s: lzw bits out of range", g.inf);
+        throw(EDOM, "%s: lzw bits out of range", g.inf);
     if (max == 9)                           /* 9 doesn't really mean 9 */
         max = 10;
     flags &= 0x80;                          /* true if block compress */
@@ -3227,13 +3227,13 @@ local void unlzw(void)
         return;
     buf = NEXT();
     if (NOMORE())
-        throw(EFTYPE, "%s: lzw premature end", g.inf);  /* need nine bits */
+        throw(EDOM, "%s: lzw premature end", g.inf);  /* need nine bits */
     buf += NEXT() << 8;
     final = prev = buf & mask;              /* code */
     buf >>= bits;
     left = 16 - bits;
     if (prev > 255)
-        throw(EFTYPE, "%s: invalid lzw code", g.inf);
+        throw(EDOM, "%s: invalid lzw code", g.inf);
     out_buf[0] = final;                     /* write first decompressed byte */
     outcnt = 1;
 
@@ -3277,7 +3277,7 @@ local void unlzw(void)
         left += 8;
         if (left < bits) {
             if (NOMORE())
-                throw(EFTYPE, "%s: lzw premature end", g.inf);
+                throw(EDOM, "%s: lzw premature end", g.inf);
             buf += (bits_t)(NEXT()) << left;
             left += 8;
         }
@@ -3321,7 +3321,7 @@ local void unlzw(void)
                    code we drop through (prev) will be a valid index so that
                    random input does not cause an exception. */
                 if (code != end + 1 || prev > end)
-                    throw(EFTYPE, "%s: invalid lzw code", g.inf);
+                    throw(EDOM, "%s: invalid lzw code", g.inf);
                 match[stack++] = final;
                 code = prev;
             }
@@ -3456,7 +3456,7 @@ local void process(char *path)
             }
 #ifdef EOVERFLOW
             if (errno == EOVERFLOW || errno == EFBIG)
-                throw(EFTYPE, "%s too large -- "
+                throw(EDOM, "%s too large -- "
                       "not compiled with large file support", g.inf);
 #endif
             if (errno) {
@@ -3583,7 +3583,7 @@ local void process(char *path)
                 }
             }
             catch (err) {
-                if (err.code != EFTYPE)
+                if (err.code != EDOM)
                     punt(err);
                 complain("skipping: %s", err.why);
                 drop(err);
@@ -3691,7 +3691,7 @@ local void process(char *path)
                 cat();
         }
         catch (err) {
-            if (err.code != EFTYPE)
+            if (err.code != EDOM)
                 punt(err);
             complain("skipping: %s", err.why);
             drop(err);
