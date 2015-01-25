@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007-2015 Mark Adler
- * Version 2.3.3  24 Jan 2015  Mark Adler
+ * Version 2.3.4  xx Feb 2015  Mark Adler
  */
 
 /*
@@ -175,9 +175,10 @@
                        Improve decompression error detection and reporting
    2.3.3  24 Jan 2015  Portability improvements
                        Update copyright years in documentation
+   2.3.4  xx Feb 2015  -
  */
 
-#define VERSION "pigz 2.3.3\n"
+#define VERSION "pigz 2.3.4x\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
