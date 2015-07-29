@@ -343,7 +343,7 @@
 #  include <inttypes.h> /* intmax_t */
 #endif
 
-#ifdef DEBUG
+#ifdef PIGZ_DEBUG
 #  if defined(__APPLE__)
 #    include <malloc/malloc.h>
 #    define MALLOC_SIZE(p) malloc_size(p)
@@ -541,7 +541,7 @@ local int complain(char *fmt, ...)
     return 0;
 }
 
-#ifdef DEBUG
+#ifdef PIGZ_DEBUG
 
 /* memory tracking */
 
@@ -642,7 +642,7 @@ local void zlib_free(voidpf opaque, voidpf address)
 #define ZALLOC zlib_alloc
 #define ZFREE zlib_free
 
-#else /* !DEBUG */
+#else /* !PIGZ_DEBUG */
 
 #define MALLOC malloc
 #define REALLOC realloc
@@ -662,7 +662,7 @@ local void *alloc(void *ptr, size_t size)
     return ptr;
 }
 
-#if DEBUG
+#ifdef PIGZ_DEBUG
 
 /* logging */
 
@@ -814,7 +814,7 @@ local void log_dump(void)
         } \
     } while (0)
 
-#else /* !DEBUG */
+#else /* !PIGZ_DEBUG */
 
 #define log_dump()
 #define Trace(x)
@@ -3776,7 +3776,7 @@ local char *helptext[] = {
 "  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
 "  -t, --test           Test the integrity of the compressed input",
 "  -T, --no-time        Do not store or restore mod time in/from header",
-#ifdef DEBUG
+#ifdef PIGZ_DEBUG
 "  -v, --verbose        Provide more verbose output (-vv to debug)",
 #else
 "  -v, --verbose        Provide more verbose output",
@@ -4081,7 +4081,7 @@ int main(int argc, char **argv)
         yarn_prefix = g.prog;           /* prefix for yarn error messages */
         yarn_abort = cut_yarn;          /* call on thread error */
 #endif
-#ifdef DEBUG
+#ifdef PIGZ_DEBUG
         gettimeofday(&start, NULL);     /* starting time for log entries */
         log_init();                     /* initialize logging */
 #endif
