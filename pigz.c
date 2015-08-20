@@ -3252,15 +3252,18 @@ local void unlzw(void)
                machine instruction!) */
             {
                 unsigned rem = ((g.in_tot - g.in_left) - mark) % bits;
-                if (rem)
+                if (rem) {
                     rem = bits - rem;
-                while (rem > g.in_left) {
-                    rem -= g.in_left;
-                    if (load() == 0)
-                        break;
+                    if (NOMORE())
+                        break;              /* end of compressed data */
+                    while (rem > g.in_left) {
+                        rem -= g.in_left;
+                        if (load() == 0)
+                            throw(EDOM, "%s: lzw premature end", g.inf);
+                    }
+                    g.in_left -= rem;
+                    g.in_next += rem;
                 }
-                g.in_left -= rem;
-                g.in_next += rem;
             }
             buf = 0;
             left = 0;
@@ -3294,15 +3297,16 @@ local void unlzw(void)
             /* flush unused input bits and bytes to next 8*bits bit boundary */
             {
                 unsigned rem = ((g.in_tot - g.in_left) - mark) % bits;
-                if (rem)
+                if (rem) {
                     rem = bits - rem;
-                while (rem > g.in_left) {
-                    rem -= g.in_left;
-                    if (load() == 0)
-                        break;
+                    while (rem > g.in_left) {
+                        rem -= g.in_left;
+                        if (load() == 0)
+                            throw(EDOM, "%s: lzw premature end", g.inf);
+                    }
+                    g.in_left -= rem;
+                    g.in_next += rem;
                 }
-                g.in_left -= rem;
-                g.in_next += rem;
             }
             buf = 0;
             left = 0;
