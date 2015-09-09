@@ -5,7 +5,7 @@ ZOPFLI=zopfli/src/zopfli/
 # use gcc and gmake on Solaris
 
 pigz: pigz.o yarn.o try.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
-	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lm
+	$(CC) $(LDFLAGS) -o pigz $^ -lpthread -lm -lz
 	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h try.h ${ZOPFLI}deflate.h ${ZOPFLI}util.h
