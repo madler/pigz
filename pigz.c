@@ -3990,7 +3990,11 @@ local int option(char *arg)
             case 'R':  g.rsync = 1;  break;
             case 'S':  get = 3;  break;
             case 'T':  g.headis &= ~0xa;  break;
-            case 'V':  fputs(VERSION, stderr);  exit(0);
+            case 'V':
+                fputs(VERSION, stderr);
+                if (g.verbosity > 1)
+                    fprintf(stderr, "zlib %s\n", zlibVersion());
+                exit(0);
             case 'Z':
                 throw(EINVAL, "invalid option: LZW output not supported: %s",
                       bad);
