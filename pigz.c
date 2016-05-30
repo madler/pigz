@@ -3766,7 +3766,7 @@ local char *helptext[] = {
 #endif
 "",
 "Options:",
-"  -0 to -9, -11        Compression level (11 is much slower, a few % better)",
+"  -0 to -9, -11        Compression level (level 11, zopfli, is much slower)",
 "  --fast, --best       Compression levels 1 and 9 respectively",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
