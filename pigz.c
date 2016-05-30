@@ -833,7 +833,7 @@ local void cut_short(int sig)
         g.outd = -1;
     }
     log_dump();
-    _exit(sig < 0 ? -sig : ECANCELED);
+    _exit(sig < 0 ? -sig : EINTR);
 }
 
 /* common code for catch block of top routine in the thread */
@@ -875,7 +875,7 @@ local inline size_t vmemcpy(char **mem, size_t *size, size_t off,
 
     need = off + len;
     if (need < off)
-        throw(EOVERFLOW, "overflow");
+        throw(ERANGE, "overflow");
     if (need > *size) {
         need = grow(need);
         if (off == 0) {
@@ -1297,7 +1297,7 @@ local void grow_space(struct space *space)
     /* compute next size up */
     more = grow(space->size);
     if (more == space->size)
-        throw(EOVERFLOW, "overflow");
+        throw(ERANGE, "overflow");
 
     /* reallocate the buffer */
     space->buf = alloc(space->buf, more);
@@ -1987,7 +1987,7 @@ local void parallel_compress(void)
         job->seq = seq;
         Trace(("-- read #%ld%s", seq, more ? "" : " (last)"));
         if (++seq < 1)
-            throw(EOVERFLOW, "overflow");
+            throw(ERANGE, "overflow");
 
         /* start another compress thread if needed */
         if (cthreads < seq && cthreads < g.procs) {
@@ -3476,7 +3476,7 @@ local void process(char *path)
                     errno = 0;
                 } while (lstat(g.inf, &st) && errno == ENOENT);
             }
-#ifdef EOVERFLOW
+#if defined(EOVERFLOW) && defined(EFBIG)
             if (errno == EOVERFLOW || errno == EFBIG)
                 throw(EDOM, "%s too large -- "
                       "not compiled with large file support", g.inf);
