@@ -1607,7 +1607,7 @@ local void compress_thread(void *dummy)
 
                         /* add enough empty blocks to get to a byte boundary */
                         (void)deflatePending(&strm, Z_NULL, &bits);
-                        if (bits & 1)
+                        if ((bits & 1) || !g.setdict)
                             deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
                         else if (bits & 7) {
                             do {        /* add static empty blocks */
@@ -1620,6 +1620,8 @@ local void compress_thread(void *dummy)
 #else
                         deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
 #endif
+                        if (!g.setdict)     /* two markers when independent */
+                            deflate_engine(&strm, job->out, Z_FULL_FLUSH);
                     }
                     else
                         deflate_engine(&strm, job->out, Z_FINISH);
@@ -1641,8 +1643,8 @@ local void compress_thread(void *dummy)
                     job->out->len += outsize;
                     if (left || job->more) {
                         bits &= 7;
-                        if (bits & 1) {
-                            if (bits == 7)
+                        if ((bits & 1) || !g.setdict) {
+                            if (bits == 0 || bits > 5)
                                 job->out->buf[job->out->len++] = 0;
                             job->out->buf[job->out->len++] = 0;
                             job->out->buf[job->out->len++] = 0;
@@ -1655,6 +1657,13 @@ local void compress_thread(void *dummy)
                                 job->out->buf[job->out->len++] = 0;
                                 bits += 2;
                             } while (bits < 8);
+                        }
+                        if (!g.setdict) {   /* two markers when independent */
+                            job->out->buf[job->out->len++] = 0;
+                            job->out->buf[job->out->len++] = 0;
+                            job->out->buf[job->out->len++] = 0;
+                            job->out->buf[job->out->len++] = 0xff;
+                            job->out->buf[job->out->len++] = 0xff;
                         }
                     }
                     temp->len += len;
@@ -2185,7 +2194,7 @@ local void single_compress(int reset)
 
                 DEFLATE_WRITE(Z_BLOCK);
                 (void)deflatePending(strm, Z_NULL, &bits);
-                if (bits & 1)
+                if ((bits & 1) || !g.setdict)
                     DEFLATE_WRITE(Z_SYNC_FLUSH);
                 else if (bits & 7) {
                     do {
@@ -2198,6 +2207,8 @@ local void single_compress(int reset)
 #else
                 DEFLATE_WRITE(Z_SYNC_FLUSH);
 #endif
+                if (!g.setdict)             /* two markers when independent */
+                    DEFLATE_WRITE(Z_FULL_FLUSH);
             }
             else
                 DEFLATE_WRITE(Z_FINISH);
@@ -2219,24 +2230,27 @@ local void single_compress(int reset)
                               in + hist, off - hist, (off - hist) + got,
                               &bits, &out, &outsize);
             bits &= 7;
-            if ((more || left) && bits) {
-                if (bits & 1) {
+            if (more || left) {
+                if ((bits & 1) || !g.setdict) {
                     writen(g.outd, out, outsize);
-                    if (bits == 7)
+                    if (bits == 0 || bits > 5)
                         writen(g.outd, (unsigned char *)"\0", 1);
                     writen(g.outd, (unsigned char *)"\0\0\xff\xff", 4);
                 }
                 else {
                     assert(outsize > 0);
                     writen(g.outd, out, outsize - 1);
-                    do {
-                        out[outsize - 1] += 2 << bits;
-                        writen(g.outd, out + outsize - 1, 1);
-                        out[outsize - 1] = 0;
-                        bits += 2;
-                    } while (bits < 8);
+                    if (bits)
+                        do {
+                            out[outsize - 1] += 2 << bits;
+                            writen(g.outd, out + outsize - 1, 1);
+                            out[outsize - 1] = 0;
+                            bits += 2;
+                        } while (bits < 8);
                     writen(g.outd, out + outsize - 1, 1);
                 }
+                if (!g.setdict)             /* two markers when independent */
+                    writen(g.outd, (unsigned char *)"\0\0\0\xff\xff", 5);
             }
             else
                 writen(g.outd, out, outsize);
