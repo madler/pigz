@@ -3500,9 +3500,10 @@ local void process(char *path)
             len = strlen(g.inf);
         }
 
-        /* only process regular files, but allow symbolic links if -f,
-           recurse into directory if -r */
+        /* only process regular files or named pipes, but allow symbolic links
+           if -f, recurse into directory if -r */
         if ((st.st_mode & S_IFMT) != S_IFREG &&
+            (st.st_mode & S_IFMT) != S_IFIFO &&
             (st.st_mode & S_IFMT) != S_IFLNK &&
             (st.st_mode & S_IFMT) != S_IFDIR) {
             complain("skipping: %s is a special file or device", g.inf);
