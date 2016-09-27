@@ -632,7 +632,7 @@ local void *yarn_malloc(size_t size)
 
 local void yarn_free(void *ptr)
 {
-    return free_track(&mem_track, ptr);
+    free_track(&mem_track, ptr);
 }
 #endif
 
