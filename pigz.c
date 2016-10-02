@@ -3542,7 +3542,7 @@ local void process(char *path)
 
             /* run process() for each entry in the directory */
             base = len && g.inf[len - 1] != (unsigned char)'/' ?
-                   vstrcpy(&g.inf, &g.inz, len, "/") : len;
+                   vstrcpy(&g.inf, &g.inz, len, "/") - 1 : len;
             for (off = 0; roll[off]; off += strlen(roll + off) + 1) {
                 vstrcpy(&g.inf, &g.inz, base, roll + off);
                 process(g.inf);
