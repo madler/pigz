@@ -1048,6 +1048,8 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
         PUT4L(tail + 8, clen);
         PUT4L(tail + 12, ulen);
         writen(g.outd, tail, 16);
+        if (clen > UINT32_MAX || ulen > UINT32_MAX)
+            complain("4 GiB or greater length: %s will be unusable", g.outf);
 
         /* write central file header */
         PUT4L(tail, 0x02014b50UL);  /* central header signature */
