@@ -1,4 +1,4 @@
-.TH PIGZ 1 "January 24, 2015"
+.TH PIGZ 1 "October 1, 2016"
 .SH NAME
 pigz, unpigz \- compress or expand files
 .SH SYNOPSIS
@@ -77,7 +77,9 @@ the
 or
 .B --independent
 option, so that the blocks can be decompressed
-independently for partial error recovery or for random access.
+independently for partial error recovery or for random access. This also
+inserts an extra empty block to flag independent blocks by prefacing
+each with the nine-byte sequence (in hex): 00 00 FF FF 00 00 00 FF FF.
 .PP
 Decompression can't be parallelized, at least not without specially prepared
 deflate streams for that purpose.  As a result,
@@ -184,7 +186,7 @@ Do not store or restore mod time in/from header.
 Provide more verbose output.
 .TP
 .B -V --version
-Show the version of pigz.
+Show the version of pigz. -vV also shows the zlib version.
 .TP
 .B -z --zlib
 Compress to zlib (.zz) instead of gzip format.
@@ -210,4 +212,4 @@ This software is provided 'as-is', without any express or implied
 warranty.  In no event will the author be held liable for any damages
 arising from the use of this software.
 .PP
-Copyright (C) 2007-2015 Mark Adler <madler@alumni.caltech.edu>
+Copyright (C) 2007-2016 Mark Adler <madler@alumni.caltech.edu>

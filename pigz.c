@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007-2015 Mark Adler
- * Version 2.3.4  xx Feb 2015  Mark Adler
+ * Copyright (C) 2007-2016 Mark Adler
+ * Version 2.3.4  1 Oct 2016  Mark Adler
  */
 
 /*
@@ -175,10 +175,15 @@
                        Improve decompression error detection and reporting
    2.3.3  24 Jan 2015  Portability improvements
                        Update copyright years in documentation
-   2.3.4  xx Feb 2015  -
+   2.3.4   1 Oct 2016  Fix an out of bounds access due to invalid LZW input
+                       Add an extra sync marker between independent blocks
+                       Add zlib version for verbose version option (-vV)
+                       Permit named pipes as input (e.g. made by mkfifo())
+                       Fix a bug in -r directory traversal
+                       Add warning for a zip file entry 4 GiB or larger
  */
 
-#define VERSION "pigz 2.3.4x\n"
+#define VERSION "pigz 2.3.4\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
@@ -3993,7 +3998,7 @@ local int option(char *arg)
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007-2015 Mark Adler\n", stderr);
+                fputs("Copyright (C) 2007-2016 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
