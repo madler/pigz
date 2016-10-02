@@ -1054,7 +1054,7 @@ local void put_trailer(unsigned long ulen, unsigned long clen,
         PUT4L(tail + 8, clen);
         PUT4L(tail + 12, ulen);
         writen(g.outd, tail, 16);
-        if (clen > UINT32_MAX || ulen > UINT32_MAX)
+        if (clen > 0xffffffff || ulen > 0xffffffff)
             complain("4 GiB or greater length: %s will be unusable", g.outf);
 
         /* write central file header */
@@ -3207,7 +3207,7 @@ local void infchk(void)
 
 /* Type for accumulating bits.  23 bits will be used to accumulate up to 16-bit
    symbols. */
-typedef uint32_t bits_t;
+typedef unsigned long bits_t;
 
 #define NOMORE() (g.in_left == 0 && (g.in_eof || load() == 0))
 #define NEXT() (g.in_left--, *g.in_next++)
