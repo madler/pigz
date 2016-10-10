@@ -326,7 +326,7 @@
                            SEEK_END, size_t, off_t */
 #include <stdlib.h>     /* exit(), malloc(), free(), realloc(), atol(), */
                         /* atoi(), getenv() */
-#include <stdarg.h>     /* va_start(), va_end(), va_list */
+#include <stdarg.h>     /* va_start(), va_arg(), va_end(), va_list */
 #include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), strcpy() */
                         /* strncpy(), strlen(), strcat(), strrchr(),
                            strerror() */
@@ -346,7 +346,10 @@
                         /* struct dirent */
 #include <limits.h>     /* UINT_MAX, INT_MAX */
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
-#  include <inttypes.h> /* intmax_t */
+#  include <inttypes.h> /* intmax_t, uintmax_t */
+   typedef uintmax_t length_t;
+#else
+   typedef unsigned long length_t;
 #endif
 
 #ifdef PIGZ_DEBUG
@@ -519,8 +522,8 @@ local struct {
     time_t stamp;               /* time stamp from gzip header */
     char *hname;                /* name from header (allocated) */
     unsigned long zip_crc;      /* local header crc */
-    unsigned long zip_clen;     /* local header compressed length */
-    unsigned long zip_ulen;     /* local header uncompressed length */
+    length_t zip_clen;          /* local header compressed length */
+    length_t zip_ulen;          /* local header uncompressed length */
 
     /* globals for decompression and listing buffered reading */
     unsigned char in_buf[BUF];  /* input buffer */
@@ -934,18 +937,21 @@ local size_t readn(int desc, unsigned char *buf, size_t len)
     return got;
 }
 
-/* write len bytes, repeating write() calls as needed */
-local void writen(int desc, unsigned char *buf, size_t len)
+/* write len bytes, repeating write() calls as needed -- return len */
+local size_t writen(int desc, void const *buf, size_t len)
 {
-    ssize_t ret;
+    char const *next = buf;
+    size_t left = len;
 
-    while (len) {
-        ret = write(desc, buf, len);
+    while (left) {
+        size_t const max = SIZE_MAX >> 1;       /* max ssize_t */
+        ssize_t ret = write(desc, next, left > max ? max : left);
         if (ret < 1)
             throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
-        buf += ret;
-        len -= ret;
+        next += ret;
+        left -= ret;
     }
+    return len;
 }
 
 /* convert Unix time to MS-DOS date and time, assuming current timezone
@@ -969,151 +975,236 @@ local unsigned long time2dos(time_t t)
     return dos;
 }
 
-/* put a 4-byte integer into a byte array in LSB order or MSB order */
-#define PUT2L(a,b) (*(a)=(b)&0xff,(a)[1]=(b)>>8)
-#define PUT4L(a,b) (PUT2L(a,(b)&0xffff),PUT2L((a)+2,(b)>>16))
-#define PUT4M(a,b) (*(a)=(b)>>24,(a)[1]=(b)>>16,(a)[2]=(b)>>8,(a)[3]=(b))
+/* Value type for put() value arguments. All value arguments for put() must be
+   cast to this type in order for va_arg() to pull the correct type from the
+   argument list. */
+typedef length_t val_t;
+
+/* Write a set of header or trailer values to out, which is a file descriptor.
+   The values are specified by a series of arguments in pairs, where the first
+   argument in each pair is the number of bytes, and the second argument in
+   each pair is the unsigned integer value to write. The first argument in each
+   pair must be an int, and the second argument in each pair must be a val_t.
+   The arguments are terminated by a single zero (an int). If the number of
+   bytes is positive, then the value is written in little-endian order. If the
+   number of bytes is negative, then the value is written in big-endian order.
+   The total number of bytes written is returned. This makes the long and
+   tiresome zip format headers and trailers more readable, maintainable, and
+   verifiable. */
+local unsigned put(int out, ...) {
+    /* compute the total number of bytes */
+    unsigned count = 0;
+    int n;
+    va_list ap;
+    va_start(ap, out);
+    while ((n = va_arg(ap, int)) != 0) {
+        va_arg(ap, val_t);
+        count += abs(n);
+    }
+    va_end(ap);
+
+    /* allocate memory on the stack for the data */
+    unsigned char wrap[count], *next = wrap;
+
+    /* write the requested data to wrap[] */
+    va_start(ap, out);
+    while ((n = va_arg(ap, int)) != 0) {
+        val_t val = va_arg(ap, val_t);
+        if (n < 0) {            /* big endian */
+            n = -n << 3;
+            do {
+                n -= 8;
+                *next++ = val >> n;
+            } while (n);
+        }
+        else {                  /* little endian */
+            do {
+                *next++ = val;
+                val >>= 8;
+            } while (--n);
+        }
+    }
+    va_end(ap);
+
+    /* write wrap[] to out and return the number of bytes written */
+    return writen(out, wrap, count);
+}
+
+/* Low 32-bits set to all ones. */
+#define LOW32 0xffffffff
 
 /* write a gzip, zlib, or zip header using the information in the globals */
-local unsigned long put_header(void)
+local length_t put_header(void)
 {
-    unsigned long len;
-    unsigned char head[30];
+    length_t len;
 
     if (g.form > 1) {               /* zip */
-        /* write local header */
-        PUT4L(head, 0x04034b50UL);  /* local header signature */
-        PUT2L(head + 4, 20);        /* version needed to extract (2.0) */
-        PUT2L(head + 6, 8);         /* flags: data descriptor follows data */
-        PUT2L(head + 8, 8);         /* deflate */
-        PUT4L(head + 10, time2dos(g.mtime));
-        PUT4L(head + 14, 0);        /* crc (not here) */
-        PUT4L(head + 18, 0);        /* compressed length (not here) */
-        PUT4L(head + 22, 0);        /* uncompressed length (not here) */
-        PUT2L(head + 26, g.name == NULL ? 1 :   /* length of name */
-                                          strlen(g.name));
-        PUT2L(head + 28, 9);        /* length of extra field (see below) */
-        writen(g.outd, head, 30);   /* write local header */
-        len = 30;
+        /* write local header -- we don't know yet whether the lengths will fit
+           in 32 bits or not, so we have to assume that they might not and put
+           in a Zip64 extra field so that the data descriptor that appears
+           after the compressed data is interpreted with 64-bit lengths */
+        len = put(g.outd,
+            4, (val_t)0x04034b50,   /* local header signature */
+            2, (val_t)45,           /* version needed to extract (4.5) */
+            2, (val_t)8,            /* flags: data descriptor follows data */
+            2, (val_t)8,            /* deflate */
+            4, (val_t)time2dos(g.mtime),
+            4, (val_t)0,            /* crc (not here) */
+            4, (val_t)LOW32,        /* compressed length (not here) */
+            4, (val_t)LOW32,        /* uncompressed length (not here) */
+            2, (val_t)(g.name == NULL ? 1 : strlen(g.name)), /* name length */
+            2, (val_t)29,           /* length of extra field (see below) */
+            0);
 
         /* write file name (use "-" for stdin) */
-        if (g.name == NULL)
-            writen(g.outd, (unsigned char *)"-", 1);
-        else
-            writen(g.outd, (unsigned char *)g.name, strlen(g.name));
-        len += g.name == NULL ? 1 : strlen(g.name);
+        len += writen(g.outd, g.name == NULL ? "-" : g.name,
+                      g.name == NULL ? 1 : strlen(g.name));
 
-        /* write extended timestamp extra field block (9 bytes) */
-        PUT2L(head, 0x5455);        /* extended timestamp signature */
-        PUT2L(head + 2, 5);         /* number of data bytes in this block */
-        head[4] = 1;                /* flag presence of mod time */
-        PUT4L(head + 5, g.mtime);   /* mod time */
-        writen(g.outd, head, 9);    /* write extra field block */
-        len += 9;
+        /* write Zip64 and extended timestamp extra field blocks (29 bytes) */
+        len += put(g.outd,
+            2, (val_t)0x0001,       /* Zip64 extended information ID */
+            2, (val_t)16,           /* number of data bytes in this block */
+            8, (val_t)0,            /* uncompressed length (not here) */
+            8, (val_t)0,            /* compressed length (not here) */
+            2, (val_t)0x5455,       /* extended timestamp ID */
+            2, (val_t)5,            /* number of data bytes in this block */
+            1, (val_t)1,            /* flag presence of mod time */
+            4, (val_t)g.mtime,      /* mod time */
+            0);
     }
     else if (g.form) {              /* zlib */
-        head[0] = 0x78;             /* deflate, 32K window */
-        head[1] = (g.level >= 9 ? 3 :
-                   (g.level == 1 ? 0 :
-                    (g.level >= 6 || g.level == Z_DEFAULT_COMPRESSION ?
-                        1 : 2))) << 6;
-        head[1] += 31 - (((head[0] << 8) + head[1]) % 31);
-        writen(g.outd, head, 2);
-        len = 2;
+        unsigned head;
+        head = (0x78 << 8) +        /* deflate, 32K window */
+               (g.level >= 9 ? 3 << 6 :
+                g.level == 1 ? 0 << 6:
+                g.level >= 6 || g.level == Z_DEFAULT_COMPRESSION ? 1 << 6 :
+                2 << 6);            /* optional compression level clue */
+        head += 31 - (head % 31);   /* make it a multiple of 31 */
+        len = put(g.outd,
+            -2, (val_t)head,        /* zlib format uses big-endian order */
+            0);
     }
     else {                          /* gzip */
-        head[0] = 31;
-        head[1] = 139;
-        head[2] = 8;                /* deflate */
-        head[3] = g.name != NULL ? 8 : 0;
-        PUT4L(head + 4, g.mtime);
-        head[8] = g.level >= 9 ? 2 : (g.level == 1 ? 4 : 0);
-        head[9] = 3;                /* unix */
-        writen(g.outd, head, 10);
-        len = 10;
+        len = put(g.outd,
+            1, (val_t)31,
+            1, (val_t)139,
+            1, (val_t)8,            /* deflate */
+            1, (val_t)(g.name != NULL ? 8 : 0),
+            4, (val_t)g.mtime,
+            1, (val_t)(g.level >= 9 ? 2 : g.level == 1 ? 4 : 0),
+            1, (val_t)3,            /* unix */
+            0);
         if (g.name != NULL)
-            writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
-        if (g.name != NULL)
-            len += strlen(g.name) + 1;
+            len += writen(g.outd, g.name, strlen(g.name) + 1);
     }
     return len;
 }
 
 /* write a gzip, zlib, or zip trailer */
-local void put_trailer(unsigned long ulen, unsigned long clen,
-                       unsigned long check, unsigned long head)
+local void put_trailer(length_t ulen, length_t clen,
+                       unsigned long check, length_t head)
 {
-    unsigned char tail[46];
-
     if (g.form > 1) {               /* zip */
-        unsigned long cent;
+        /* write Zip64 data descriptor, as promised in the local header */
+        length_t desc = put(g.outd,
+            4, (val_t)0x08074b50,
+            4, (val_t)check,
+            8, (val_t)clen,
+            8, (val_t)ulen,
+            0);
 
-        /* write data descriptor (as promised in local header) */
-        PUT4L(tail, 0x08074b50UL);
-        PUT4L(tail + 4, check);
-        PUT4L(tail + 8, clen);
-        PUT4L(tail + 12, ulen);
-        writen(g.outd, tail, 16);
-        if (clen > 0xffffffff || ulen > 0xffffffff)
-            complain("4 GiB or greater length: %s will be unusable", g.outf);
+        /* zip64 is true if either the compressed or the uncompressed length
+           does not fit in 32 bits, in which case there needs to be a Zip64
+           extra block in the central directory entry */
+        int zip64 = ulen >= LOW32 || clen >= LOW32;
 
         /* write central file header */
-        PUT4L(tail, 0x02014b50UL);  /* central header signature */
-        tail[4] = 63;               /* obeyed version 6.3 of the zip spec */
-        tail[5] = 255;              /* ignore external attributes */
-        PUT2L(tail + 6, 20);        /* version needed to extract (2.0) */
-        PUT2L(tail + 8, 8);         /* data descriptor is present */
-        PUT2L(tail + 10, 8);        /* deflate */
-        PUT4L(tail + 12, time2dos(g.mtime));
-        PUT4L(tail + 16, check);    /* crc */
-        PUT4L(tail + 20, clen);     /* compressed length */
-        PUT4L(tail + 24, ulen);     /* uncompressed length */
-        PUT2L(tail + 28, g.name == NULL ? 1 :   /* length of name */
-                                          strlen(g.name));
-        PUT2L(tail + 30, 9);        /* length of extra field (see below) */
-        PUT2L(tail + 32, 0);        /* no file comment */
-        PUT2L(tail + 34, 0);        /* disk number 0 */
-        PUT2L(tail + 36, 0);        /* internal file attributes */
-        PUT4L(tail + 38, 0);        /* external file attributes (ignored) */
-        PUT4L(tail + 42, 0);        /* offset of local header */
-        writen(g.outd, tail, 46);   /* write central file header */
-        cent = 46;
+        length_t cent = put(g.outd,
+            4, (val_t)0x02014b50,   /* central header signature */
+            1, (val_t)45,           /* made by 4.5 for Zip64 V1 end record */
+            1, (val_t)255,          /* ignore external attributes */
+            2, (val_t)45,           /* version needed to extract (4.5) */
+            2, (val_t)8,            /* data descriptor is present */
+            2, (val_t)8,            /* deflate */
+            4, (val_t)time2dos(g.mtime),
+            4, (val_t)check,        /* crc */
+            4, (val_t)(zip64 ? LOW32 : clen),   /* compressed length */
+            4, (val_t)(zip64 ? LOW32 : ulen),   /* uncompressed length */
+            2, (val_t)(g.name == NULL ? 1 : strlen(g.name)), /* name length */
+            2, (val_t)(zip64 ? 29 : 9), /* extra field size (see below) */
+            2, (val_t)0,            /* no file comment */
+            2, (val_t)0,            /* disk number 0 */
+            2, (val_t)0,            /* internal file attributes */
+            4, (val_t)0,            /* external file attributes (ignored) */
+            4, (val_t)0,            /* offset of local header */
+            0);
 
         /* write file name (use "-" for stdin) */
-        if (g.name == NULL)
-            writen(g.outd, (unsigned char *)"-", 1);
-        else
-            writen(g.outd, (unsigned char *)g.name, strlen(g.name));
-        cent += g.name == NULL ? 1 : strlen(g.name);
+        cent += writen(g.outd, g.name == NULL ? "-" : g.name,
+                       g.name == NULL ? 1 : strlen(g.name));
+
+        /* write Zip64 extra field block (20 bytes) */
+        if (zip64)
+            cent += put(g.outd,
+                2, (val_t)0x0001,   /* Zip64 extended information ID */
+                2, (val_t)16,       /* number of data bytes in this block */
+                8, (val_t)ulen,     /* uncompressed length */
+                8, (val_t)clen,     /* compressed length */
+                0);
 
         /* write extended timestamp extra field block (9 bytes) */
-        PUT2L(tail, 0x5455);        /* extended timestamp signature */
-        PUT2L(tail + 2, 5);         /* number of data bytes in this block */
-        tail[4] = 1;                /* flag presence of mod time */
-        PUT4L(tail + 5, g.mtime);   /* mod time */
-        writen(g.outd, tail, 9);    /* write extra field block */
-        cent += 9;
+        cent += put(g.outd,
+            2, (val_t)0x5455,       /* extended timestamp signature */
+            2, (val_t)5,            /* number of data bytes in this block */
+            1, (val_t)1,            /* flag presence of mod time */
+            4, (val_t)g.mtime,      /* mod time */
+            0);
+
+        /* here zip64 is true if the offset of the central directory does not
+           fit in 32 bits, in which case insert the Zip64 end records to
+           provide a 64-bit offset */
+        zip64 = head + clen + desc >= LOW32;
+        if (zip64) {
+            /* write Zip64 end of central directory record and locator */
+            put(g.outd,
+                4, (val_t)0x06064b50,   /* Zip64 end of central dir sig */
+                8, (val_t)44,       /* size of the remainder of this record */
+                2, (val_t)45,       /* version made by */
+                2, (val_t)45,       /* version needed to extract */
+                4, (val_t)0,        /* number of this disk */
+                4, (val_t)0,        /* disk with start of central directory */
+                8, (val_t)1,        /* number of entries on this disk */
+                8, (val_t)1,        /* total number of entries */
+                8, (val_t)cent,     /* size of central directory */
+                8, (val_t)(head + clen + desc), /* central dir offset */
+                4, (val_t)0x07064b50,   /* Zip64 end locator signature */
+                4, (val_t)0,        /* disk with Zip64 end of central dir */
+                8, (val_t)(head + clen + desc + cent),  /* location */
+                4, (val_t)1,        /* total number of disks */
+                0);
+        }
 
         /* write end of central directory record */
-        PUT4L(tail, 0x06054b50UL);  /* end of central directory signature */
-        PUT2L(tail + 4, 0);         /* number of this disk */
-        PUT2L(tail + 6, 0);         /* disk with start of central directory */
-        PUT2L(tail + 8, 1);         /* number of entries on this disk */
-        PUT2L(tail + 10, 1);        /* total number of entries */
-        PUT4L(tail + 12, cent);     /* size of central directory */
-        PUT4L(tail + 16, head + clen + 16); /* offset of central directory */
-        PUT2L(tail + 20, 0);        /* no zip file comment */
-        writen(g.outd, tail, 22);   /* write end of central directory record */
+        put(g.outd,
+            4, (val_t)0x06054b50,   /* end of central directory signature */
+            2, (val_t)0,            /* number of this disk */
+            2, (val_t)0,            /* disk with start of central directory */
+            2, (val_t)(zip64 ? 0xffff : 1), /* entries on this disk */
+            2, (val_t)(zip64 ? 0xffff : 1), /* total number of entries */
+            4, (val_t)(zip64 ? LOW32 : cent),   /* size of central directory */
+            4, (val_t)(zip64 ? LOW32 : head + clen + desc), /* offset */
+            2, (val_t)0,            /* no zip file comment */
+            0);
     }
-    else if (g.form) {              /* zlib */
-        PUT4M(tail, check);
-        writen(g.outd, tail, 4);
-    }
-    else {                          /* gzip */
-        PUT4L(tail, check);
-        PUT4L(tail + 4, ulen);
-        writen(g.outd, tail, 8);
-    }
+    else if (g.form)                /* zlib */
+        put(g.outd,
+            -4, (val_t)check,       /* zlib format uses big-endian order */
+            0);
+    else                            /* gzip */
+        put(g.outd,
+            4, (val_t)check,
+            4, (val_t)ulen,
+            0);
 }
 
 /* compute check value depending on format */
@@ -1748,9 +1839,9 @@ local void write_thread(void *dummy)
     struct job *job;                /* job pulled and working on */
     size_t len;                     /* input length */
     int more;                       /* true if more chunks to write */
-    unsigned long head;             /* header length */
-    unsigned long ulen;             /* total uncompressed size (overflow ok) */
-    unsigned long clen;             /* total compressed size (overflow ok) */
+    length_t head;                  /* header length */
+    length_t ulen;                  /* total uncompressed size (overflow ok) */
+    length_t clen;                  /* total compressed size (overflow ok) */
     unsigned long check;            /* check value of uncompressed data */
     ball_t err;                     /* error information from throw() */
 
@@ -1777,8 +1868,8 @@ local void write_thread(void *dummy)
             more = job->more;
             len = job->in->len;
             drop_space(job->in);
-            ulen += (unsigned long)len;
-            clen += (unsigned long)(job->out->len);
+            ulen += len;
+            clen += job->out->len;
 
             /* write the compressed data and drop the output buffer */
             Trace(("-- writing #%ld", seq));
@@ -2039,8 +2130,7 @@ local void parallel_compress(void)
             strm->avail_out = out_size; \
             strm->next_out = out; \
             (void)deflate(strm, flush); \
-            writen(g.outd, out, out_size - strm->avail_out); \
-            clen += out_size - strm->avail_out; \
+            clen += writen(g.outd, out, out_size - strm->avail_out); \
         } while (strm->avail_out == 0); \
         assert(strm->avail_in == 0); \
     } while (0)
@@ -2060,8 +2150,8 @@ local void single_compress(int reset)
     unsigned char *scan;            /* pointer for hash computation */
     size_t left;                    /* bytes left to compress after hash hit */
     unsigned long head;             /* header length */
-    unsigned long ulen;             /* total uncompressed size (overflow ok) */
-    unsigned long clen;             /* total compressed size (overflow ok) */
+    length_t ulen;                  /* total uncompressed size */
+    length_t clen;                  /* total compressed size */
     unsigned long check;            /* check value of uncompressed data */
     static unsigned out_size;       /* size of output buffer */
     static unsigned char *in, *next, *out;  /* reused i/o buffers */
@@ -2111,7 +2201,7 @@ local void single_compress(int reset)
     /* do raw deflate and calculate check value */
     got = 0;
     more = readn(g.ind, next, g.block);
-    ulen = (unsigned long)more;
+    ulen = more;
     start = 0;
     hist = 0;
     clen = 0;
@@ -2135,7 +2225,7 @@ local void single_compress(int reset)
             else
                 start = 0;
             more = readn(g.ind, next + start, g.block);
-            ulen += (unsigned long)more;
+            ulen += more;
         }
 
         /* if rsyncable, compute hash until a hit or the end of the block */
@@ -2170,7 +2260,7 @@ local void single_compress(int reset)
                     /* if that emptied the next buffer, try to refill it */
                     if (more == 0) {
                         more = readn(g.ind, next, g.block);
-                        ulen += (unsigned long)more;
+                        ulen += more;
                         start = 0;
                     }
                 }
@@ -2467,8 +2557,6 @@ local long tolong(unsigned long val)
 {
     return (long)(val & 0x7fffffffUL) - (long)(val & 0x80000000UL);
 }
-
-#define LOW32 0xffffffffUL
 
 /* process zip extra field to extract zip64 lengths and Unix mod time */
 local int read_extra(unsigned len, int save)
@@ -2911,15 +2999,13 @@ local void list_info(void)
 local void cat(void)
 {
     /* write first magic byte (if we're here, there's at least one byte) */
-    writen(g.outd, &g.magic1, 1);
-    g.out_tot = 1;
+    g.out_tot = writen(g.outd, &g.magic1, 1);
 
     /* copy the remainder of the input to the output (if there were any more
        bytes of input, then g.in_left is non-zero and g.in_next is pointing to
        the second magic byte) */
     while (g.in_left) {
-        writen(g.outd, g.in_next, g.in_left);
-        g.out_tot += g.in_left;
+        g.out_tot += writen(g.outd, g.in_next, g.in_left);
         g.in_left = 0;
         load();
     }
