@@ -1003,8 +1003,9 @@ local unsigned put(int out, ...) {
     }
     va_end(ap);
 
-    /* allocate memory on the stack for the data */
-    unsigned char wrap[count], *next = wrap;
+    /* allocate memory for the data */
+    unsigned char *wrap = alloc(NULL, count);
+    unsigned char *next = wrap;
 
     /* write the requested data to wrap[] */
     va_start(ap, out);
@@ -1017,17 +1018,18 @@ local unsigned put(int out, ...) {
                 *next++ = val >> n;
             } while (n);
         }
-        else {                  /* little endian */
+        else                    /* little endian */
             do {
                 *next++ = val;
                 val >>= 8;
             } while (--n);
-        }
     }
     va_end(ap);
 
     /* write wrap[] to out and return the number of bytes written */
-    return writen(out, wrap, count);
+    writen(out, wrap, count);
+    free(wrap);
+    return count;
 }
 
 /* Low 32-bits set to all ones. */
