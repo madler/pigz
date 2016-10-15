@@ -655,7 +655,6 @@ local void zlib_free(voidpf opaque, voidpf address)
     free_track(opaque, address);
 }
 
-#define MALLOC(s) malloc_track(&mem_track, s)
 #define REALLOC(p, s) realloc_track(&mem_track, p, s)
 #define FREE(p) free_track(&mem_track, p)
 #define OPAQUE (&mem_track)
@@ -664,7 +663,6 @@ local void zlib_free(voidpf opaque, voidpf address)
 
 #else /* !PIGZ_DEBUG */
 
-#define MALLOC malloc
 #define REALLOC realloc
 #define FREE free
 #define OPAQUE Z_NULL
