@@ -531,8 +531,8 @@ local struct {
     size_t in_left;         /* number of unused bytes in buffer */
     int in_eof;             /* true if reached end of file on input */
     int in_short;           /* true if last read didn't fill buffer */
-    off_t in_tot;           /* total bytes read from input */
-    off_t out_tot;          /* total bytes written to output */
+    length_t in_tot;        /* total bytes read from input */
+    length_t out_tot;       /* total bytes written to output */
     unsigned long out_check;    /* check value of output */
 
 #ifndef NOTHREAD
@@ -931,8 +931,8 @@ local size_t readn(int desc, unsigned char *buf, size_t len)
         if (ret == 0)
             break;
         buf += ret;
-        len -= ret;
-        got += ret;
+        len -= (size_t)ret;
+        got += (size_t)ret;
     }
     return got;
 }
@@ -949,7 +949,7 @@ local size_t writen(int desc, void const *buf, size_t len)
         if (ret < 1)
             throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
         next += ret;
-        left -= ret;
+        left -= (size_t)ret;
     }
     return len;
 }
@@ -966,12 +966,12 @@ local unsigned long time2dos(time_t t)
     tm = localtime(&t);
     if (tm->tm_year < 80 || tm->tm_year > 207)
         return 0;
-    dos = (tm->tm_year - 80) << 25;
-    dos += (tm->tm_mon + 1) << 21;
-    dos += tm->tm_mday << 16;
-    dos += tm->tm_hour << 11;
-    dos += tm->tm_min << 5;
-    dos += (tm->tm_sec + 1) >> 1;   /* round to double-seconds */
+    dos = (unsigned long)(tm->tm_year - 80) << 25;
+    dos += (unsigned long)(tm->tm_mon + 1) << 21;
+    dos += (unsigned long)tm->tm_mday << 16;
+    dos += (unsigned long)tm->tm_hour << 11;
+    dos += (unsigned long)tm->tm_min << 5;
+    dos += (unsigned long)(tm->tm_sec + 1) >> 1;    /* round to even seconds */
     return dos;
 }
 
@@ -999,7 +999,7 @@ local unsigned put(int out, ...) {
     va_start(ap, out);
     while ((n = va_arg(ap, int)) != 0) {
         va_arg(ap, val_t);
-        count += abs(n);
+        count += (unsigned)abs(n);
     }
     va_end(ap);
 
@@ -1015,12 +1015,12 @@ local unsigned put(int out, ...) {
             n = -n << 3;
             do {
                 n -= 8;
-                *next++ = val >> n;
+                *next++ = (unsigned char)(val >> n);
             } while (n);
         }
         else                    /* little endian */
             do {
-                *next++ = val;
+                *next++ = (unsigned char)val;
                 val >>= 8;
             } while (--n);
     }
@@ -1209,8 +1209,30 @@ local void put_trailer(length_t ulen, length_t clen,
             0);
 }
 
+/* compute an Adler-32, allowing a size_t length */
+local unsigned long adler32z(unsigned long adler,
+                           unsigned char const *buf, size_t len) {
+    while (len > UINT_MAX && buf != NULL) {
+        adler = adler32(adler, buf, UINT_MAX);
+        buf += UINT_MAX;
+        len -= UINT_MAX;
+    }
+    return adler32(adler, buf, (unsigned)len);
+}
+
+/* compute a CRC-32, allowing a size_t length */
+local unsigned long crc32z(unsigned long crc,
+                           unsigned char const *buf, size_t len) {
+    while (len > UINT_MAX && buf != NULL) {
+        crc = crc32(crc, buf, UINT_MAX);
+        buf += UINT_MAX;
+        len -= UINT_MAX;
+    }
+    return crc32(crc, buf, (unsigned)len);
+}
+
 /* compute check value depending on format */
-#define CHECK(a,b,c) (g.form == 1 ? adler32(a,b,c) : crc32(a,b,c))
+#define CHECK(a,b,c) (g.form == 1 ? adler32z(a,b,c) : crc32z(a,b,c))
 
 #ifndef NOTHREAD
 /* -- threaded portions of pigz -- */
@@ -1427,7 +1449,7 @@ local void use_space(struct space *space)
 /* drop a space, returning it to the pool if the use count is zero */
 local void drop_space(struct space *space)
 {
-    int use;
+    long use;
     struct pool *pool;
 
     if (space == NULL)
@@ -1582,7 +1604,7 @@ local void deflate_engine(z_stream *strm, struct space *out, int flush)
         strm->next_out = out->buf + out->len;
         strm->avail_out = room < UINT_MAX ? (unsigned)room : UINT_MAX;
         (void)deflate(strm, flush);
-        out->len = strm->next_out - out->buf;
+        out->len = (size_t)(strm->next_out - out->buf);
     } while (strm->avail_out == 0);
     assert(strm->avail_in == 0);
 }
@@ -1657,7 +1679,7 @@ local void compress_thread(void *dummy)
                 left = len < DICT ? len : DICT;
                 if (g.level <= 9)
                     deflateSetDictionary(&strm, job->out->buf + (len - left),
-                                         left);
+                                         (unsigned)left);
                 else {
                     memcpy(temp->buf, job->out->buf + (len - left), left);
                     temp->len = left;
@@ -1688,13 +1710,13 @@ local void compress_thread(void *dummy)
                 else if (len < 192)             /* 1..63 */
                     len &= 0x3f;
                 else if (len < 224){            /* 32832..2129983 */
-                    len = ((len & 0x1f) << 16) + (*next++ << 8);
+                    len = ((len & 0x1f) << 16) + ((size_t)*next++ << 8);
                     len += *next++ + 32832U;
                 }
                 else {                          /* 2129984..539000895 */
-                    len = ((len & 0x1f) << 24) + (*next++ << 16);
-                    len += *next++ << 8;
-                    len += *next++ + 2129984UL;
+                    len = ((len & 0x1f) << 24) + ((size_t)*next++ << 16);
+                    len += (size_t)*next++ << 8;
+                    len += (size_t)*next++ + 2129984UL;
                 }
                 left -= len;
 
@@ -1922,24 +1944,24 @@ local void append_len(struct job *job, size_t len)
     if (lens->size < lens->len + 3)
         grow_space(lens);
     if (len < 64)
-        lens->buf[lens->len++] = len + 128;
+        lens->buf[lens->len++] = (unsigned char)(len + 128);
     else if (len < 32832U) {
         len -= 64;
-        lens->buf[lens->len++] = len >> 8;
-        lens->buf[lens->len++] = len;
+        lens->buf[lens->len++] = (unsigned char)(len >> 8);
+        lens->buf[lens->len++] = (unsigned char)len;
     }
     else if (len < 2129984UL) {
         len -= 32832U;
-        lens->buf[lens->len++] = (len >> 16) + 192;
-        lens->buf[lens->len++] = len >> 8;
-        lens->buf[lens->len++] = len;
+        lens->buf[lens->len++] = (unsigned char)((len >> 16) + 192);
+        lens->buf[lens->len++] = (unsigned char)(len >> 8);
+        lens->buf[lens->len++] = (unsigned char)len;
     }
     else {
         len -= 2129984UL;
-        lens->buf[lens->len++] = (len >> 24) + 224;
-        lens->buf[lens->len++] = len >> 16;
-        lens->buf[lens->len++] = len >> 8;
-        lens->buf[lens->len++] = len;
+        lens->buf[lens->len++] = (unsigned char)((len >> 24) + 224);
+        lens->buf[lens->len++] = (unsigned char)(len >> 16);
+        lens->buf[lens->len++] = (unsigned char)(len >> 8);
+        lens->buf[lens->len++] = (unsigned char)len;
     }
 }
 
@@ -2011,14 +2033,14 @@ local void parallel_compress(void)
                 while (scan < end) {
                     hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
                     if (hash == RSYNCHIT) {
-                        len = scan - last;
+                        len = (size_t)(scan - last);
                         append_len(job, len);
                         last = scan;
                     }
                 }
 
                 /* continue scan in next */
-                left = scan - last;
+                left = (size_t)(scan - last);
                 scan = next->buf;
             }
 
@@ -2034,7 +2056,7 @@ local void parallel_compress(void)
             while (scan < end) {
                 hash = ((hash << 1) ^ *scan++) & RSYNCMASK;
                 if (hash == RSYNCHIT) {
-                    len = (scan - last) + left;
+                    len = (size_t)(scan - last) + left;
                     left = 0;
                     append_len(job, len);
                     last = scan;
@@ -2044,7 +2066,7 @@ local void parallel_compress(void)
 
             /* create input in curr for job up to last hit or entire buffer if
                no hits at all -- save remainder in next and possibly hold */
-            len = (job->lens->len == 1 ? scan : last) - next->buf;
+            len = (size_t)((job->lens->len == 1 ? scan : last) - next->buf);
             if (len) {
                 /* got hits in next, or no hits in either -- copy to curr */
                 memcpy(curr->buf + curr->len, next->buf, len);
@@ -2245,7 +2267,7 @@ local void single_compress(int reset)
                     /* fill in[] with what's left there and as much as possible
                        from next[] -- set up to continue hash hit search */
                     if (g.level > 9) {
-                        left = (strm->next_in - in) - hist;
+                        left = (size_t)(strm->next_in - in) - hist;
                         if (left > DICT)
                             left = DICT;
                     }
@@ -2330,7 +2352,7 @@ local void single_compress(int reset)
             size_t outsize, off;
 
             /* discard history if requested */
-            off = strm->next_in - in;
+            off = (size_t)(strm->next_in - in);
             if (fresh)
                 hist = off;
 
@@ -2513,19 +2535,19 @@ local void in_init(void)
 
 /* GET(), GET2(), GET4() and SKIP() equivalents, with crc update */
 #define GETC() (g.in_left == 0 && (g.in_eof || load() == 0) ? 0 : \
-                (g.in_left--, crc = crc32(crc, g.in_next, 1), *g.in_next++))
+                (g.in_left--, crc = crc32z(crc, g.in_next, 1), *g.in_next++))
 #define GET2C() (tmp2 = GETC(), tmp2 + ((unsigned)(GETC()) << 8))
 #define GET4C() (tmp4 = GET2C(), tmp4 + ((unsigned long)(GET2C()) << 16))
 #define SKIPC(dist) \
     do { \
         size_t togo = (dist); \
         while (togo > g.in_left) { \
-            crc = crc32(crc, g.in_next, g.in_left); \
+            crc = crc32z(crc, g.in_next, g.in_left); \
             togo -= g.in_left; \
             if (load() == 0) \
                 return -3; \
         } \
-        crc = crc32(crc, g.in_next, togo); \
+        crc = crc32z(crc, g.in_next, togo); \
         g.in_left -= togo; \
         g.in_next += togo; \
     } while (0)
@@ -2622,8 +2644,8 @@ local int read_extra(unsigned len, int save)
 local int get_header(int save)
 {
     unsigned magic;             /* magic header */
-    int method;                 /* compression method */
-    int flags;                  /* header flags */
+    unsigned method;            /* compression method */
+    unsigned flags;             /* header flags */
     unsigned fname, extra;      /* name and extra field lengths */
     unsigned tmp2;              /* for macro */
     unsigned long tmp4;         /* for macro */
@@ -2640,7 +2662,7 @@ local int get_header(int save)
     g.magic1 = GET();
     if (g.in_eof)
         return -1;
-    magic = g.magic1 << 8;
+    magic = (unsigned)g.magic1 << 8;
     magic += GET();
     if (g.in_eof)
         return -2;
@@ -2698,7 +2720,7 @@ local int get_header(int save)
             SKIP(fname);
         read_extra(extra, save);
         g.form = 2 + ((flags & 8) >> 3);
-        return g.in_eof ? -3 : method;
+        return g.in_eof ? -3 : (int)method;
     }
     if (magic != 0x1f8b) {          /* not gzip */
         g.in_left++;    /* unget second magic byte */
@@ -2740,7 +2762,7 @@ local int get_header(int save)
             g.in_left -= copy;
             g.in_next += copy;
         } while (end == NULL);
-        crc = crc32(crc, (unsigned char *)g.hname, have);
+        crc = crc32z(crc, (unsigned char *)g.hname, have);
     }
     else if (flags & 8)
         while (GETC() != 0)
@@ -2757,7 +2779,7 @@ local int get_header(int save)
 
     /* return gzip compression method */
     g.form = 0;
-    return g.in_eof ? -3 : method;
+    return g.in_eof ? -3 : (int)method;
 }
 
 /* --- list contents of compressed input (gzip, zlib, or lzw) */
@@ -2796,7 +2818,7 @@ local size_t compressed_suffix(char *nm)
 #define NAMEMAX2 16     /* name display limit at verbosity 2 */
 
 /* print gzip or lzw file information */
-local void show_info(int method, unsigned long check, off_t len, int cont)
+local void show_info(int method, unsigned long check, length_t len, int cont)
 {
     size_t max;             /* maximum name length for current verbosity */
     size_t n;               /* name length without suffix */
@@ -2888,7 +2910,8 @@ local void list_info(void)
     size_t n;               /* available trailer bytes */
     off_t at;               /* used to calculate compressed length */
     unsigned char tail[8];  /* trailer containing check and length */
-    unsigned long check, len;   /* check value and length from trailer */
+    unsigned long check;    /* check value */
+    length_t len;           /* length from trailer */
 
     /* initialize input buffer */
     in_init();
@@ -2924,7 +2947,7 @@ local void list_info(void)
             check &= LOW32;
         }
         else {
-            g.in_tot = at;
+            g.in_tot = (length_t)at;
             lseek(g.ind, -4, SEEK_END);
             readn(g.ind, tail, 4);
             check = PULL4M(tail);
@@ -2941,7 +2964,7 @@ local void list_info(void)
             while (load() != 0)
                 ;
         else
-            g.in_tot = at;
+            g.in_tot = (length_t)at;
         g.in_tot -= 3;
         show_info(method, 0, 0, 0);
         return;
@@ -2957,11 +2980,11 @@ local void list_info(void)
         memcpy(tail, g.in_next + (g.in_left - 8), 8);
     }
     else if ((at = lseek(g.ind, -8, SEEK_END)) != -1) {
-        g.in_tot = at - g.in_tot + g.in_left;   /* compressed size */
+        g.in_tot = (length_t)at - g.in_tot + g.in_left; /* compressed size */
         readn(g.ind, tail, 8);          /* get trailer */
     }
     else {                              /* can't seek */
-        at = g.in_tot - g.in_left;      /* save header size */
+        len = g.in_tot - g.in_left;     /* save header size */
         do {
             n = g.in_left < 8 ? g.in_left : 8;
             memcpy(tail, g.in_next + (g.in_left - n), n);
@@ -2980,7 +3003,7 @@ local void list_info(void)
         }
         else
             memcpy(tail, g.in_next + (g.in_left - 8), 8);
-        g.in_tot -= at + 8;
+        g.in_tot -= len + 8;
     }
     if (g.in_tot < 2) {
         complain("skipping: %s not a valid gzip file", g.inf);
@@ -3019,9 +3042,13 @@ local void cat(void)
 local unsigned inb(void *desc, unsigned char **buf)
 {
     (void)desc;
-    load();
+    if (g.in_left == 0)
+        load();
     *buf = g.in_next;
-    return g.in_left;
+    unsigned len = g.in_left > UINT_MAX ? UINT_MAX : (unsigned)g.in_left;
+    g.in_next += len;
+    g.in_left -= len;
+    return len;
 }
 
 /* output buffers and window for infchk() and unlzw() */
@@ -3166,7 +3193,7 @@ local void infchk(void)
     z_stream strm;
     unsigned tmp2;
     unsigned long tmp4;
-    off_t clen;
+    length_t clen;
 
     cont = 0;
     do {
@@ -3184,8 +3211,8 @@ local void infchk(void)
             throw(EINVAL, "internal error");
 
         /* decompress, compute lengths and check value */
-        strm.avail_in = g.in_left;
-        strm.next_in = g.in_next;
+        strm.avail_in = 0;
+        strm.next_in = Z_NULL;
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         inflateBackEnd(&strm);
         if (ret == Z_DATA_ERROR)
@@ -3195,7 +3222,7 @@ local void infchk(void)
             throw(EDOM, "%s: corrupted -- incomplete deflate data", g.inf);
         if (ret != Z_STREAM_END)
             throw(EINVAL, "internal error");
-        g.in_left = strm.avail_in;
+        g.in_left += strm.avail_in;
         g.in_next = strm.next_in;
         outb(NULL, NULL, 0);        /* finish off final write and check */
 
@@ -3298,7 +3325,7 @@ local void infchk(void)
 typedef unsigned long bits_t;
 
 #define NOMORE() (g.in_left == 0 && (g.in_eof || load() == 0))
-#define NEXT() (g.in_left--, *g.in_next++)
+#define NEXT() (g.in_left--, (unsigned)*g.in_next++)
 
 /* Decompress a compress (LZW) file from ind to outd.  The compress magic
    header (two bytes) has already been read and verified. */
@@ -3308,7 +3335,7 @@ local void unlzw(void)
     unsigned mask;              /* mask for current bits codes = (1<<bits)-1 */
     bits_t buf;                 /* bit buffer (need 23 bits) */
     unsigned left;              /* bits left in buf (0..7 after code pulled) */
-    off_t mark;                 /* offset where last change in bits began */
+    length_t mark;              /* offset where last change in bits began */
     unsigned code;              /* code, table traversal index */
     unsigned max;               /* maximum bits per code for this stream */
     unsigned flags;             /* compress flags, then block compress flag */
@@ -3359,7 +3386,7 @@ local void unlzw(void)
     left = 16 - bits;
     if (prev > 255)
         throw(EDOM, "%s: invalid lzw code", g.inf);
-    out_buf[0] = final;                     /* write first decompressed byte */
+    out_buf[0] = (unsigned char)final;      /* write first decompressed byte */
     outcnt = 1;
 
     /* decode codes */
@@ -3451,7 +3478,7 @@ local void unlzw(void)
                    random input does not cause an exception. */
                 if (code != end + 1 || prev > end)
                     throw(EDOM, "%s: invalid lzw code", g.inf);
-                match[stack++] = final;
+                match[stack++] = (unsigned char)final;
                 code = prev;
             }
 
@@ -3460,14 +3487,14 @@ local void unlzw(void)
                 match[stack++] = suffix[code];
                 code = prefix[code];
             }
-            match[stack++] = code;
+            match[stack++] = (unsigned char)code;
             final = code;
 
             /* link new table entry */
             if (end < mask) {
                 end++;
-                prefix[end] = prev;
-                suffix[end] = final;
+                prefix[end] = (uint_least16_t)prev;
+                suffix[end] = (unsigned char)final;
             }
 
             /* set previous code for next iteration */
@@ -3659,7 +3686,7 @@ local void process(char *path)
 
         /* create output file only if input file has compressed suffix */
         if (g.decode == 1 && !g.pipeout && !g.list) {
-            int suf = compressed_suffix(g.inf);
+            size_t suf = compressed_suffix(g.inf);
             if (suf == 0) {
                 complain("skipping: %s does not have compressed suffix",
                          g.inf);
@@ -3754,7 +3781,7 @@ local void process(char *path)
             /* for -dN or -dNT, use the path from the input file and the name
                from the header, stripping any path in the header name */
             if ((g.headis & 1) != 0 && g.hname != NULL) {
-                pre = justname(g.inf) - g.inf;
+                pre = (size_t)(justname(g.inf) - g.inf);
                 to = justname(g.hname);
                 len = strlen(to);
             }
@@ -4015,9 +4042,9 @@ local size_t num(char *arg)
         throw(EINVAL, "internal error: empty parameter");
     do {
         if (*str < '0' || *str > '9' ||
-            (val && ((~(size_t)0) - (*str - '0')) / val < 10))
+            (val && ((~(size_t)0) - (size_t)(*str - '0')) / val < 10))
             throw(EINVAL, "invalid numeric parameter: %s", arg);
-        val = val * 10 + (*str - '0');
+        val = val * 10 + (size_t)(*str - '0');
     } while (*++str);
     return val;
 }
@@ -4164,9 +4191,9 @@ local int option(char *arg)
         else if (get == 3)
             g.sufx = arg;                       /* gz suffix */
         else if (get == 4)
-            g.zopts.numiterations = num(arg);   /* optimization iterations */
+            g.zopts.numiterations = (int)num(arg);  /* optimize iterations */
         else if (get == 5)
-            g.zopts.blocksplittingmax = num(arg);   /* max block splits */
+            g.zopts.blocksplittingmax = (int)num(arg);  /* max block splits */
         get = 0;
         return 0;
     }
@@ -4189,6 +4216,7 @@ int main(int argc, char **argv)
     int n;                          /* general index */
     int noop;                       /* true to suppress option decoding */
     unsigned long done;             /* number of named files processed */
+    size_t k;                       /* program name length */
     char *opts, *p;                 /* environment default options, marker */
     ball_t err;                     /* error information from throw() */
 
@@ -4263,7 +4291,7 @@ int main(int argc, char **argv)
                 g.headis >>= 2;
             g.decode = 1;
         }
-        if ((n = strlen(g.prog)) > 2 && strcmp(g.prog + n - 3, "cat") == 0) {
+        if ((k = strlen(g.prog)) > 2 && strcmp(g.prog + k - 3, "cat") == 0) {
             if (!g.decode)
                 g.headis >>= 2;
             g.decode = 1;
