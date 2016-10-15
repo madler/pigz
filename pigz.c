@@ -2348,46 +2348,46 @@ local void single_compress(int reset)
         }
         else {
             /* compress got bytes using zopfli, bring to byte boundary */
-            unsigned char bits, *out;
-            size_t outsize, off;
+            unsigned char bits, *def;
+            size_t size, off;
 
             /* discard history if requested */
             off = (size_t)(strm->next_in - in);
             if (fresh)
                 hist = off;
 
-            out = NULL;
-            outsize = 0;
+            def = NULL;
+            size = 0;
             bits = 0;
             ZopfliDeflatePart(&g.zopts, 2, !(more || left),
                               in + hist, off - hist, (off - hist) + got,
-                              &bits, &out, &outsize);
+                              &bits, &def, &size);
             bits &= 7;
             if (more || left) {
                 if ((bits & 1) || !g.setdict) {
-                    writen(g.outd, out, outsize);
+                    writen(g.outd, def, size);
                     if (bits == 0 || bits > 5)
                         writen(g.outd, (unsigned char *)"\0", 1);
                     writen(g.outd, (unsigned char *)"\0\0\xff\xff", 4);
                 }
                 else {
-                    assert(outsize > 0);
-                    writen(g.outd, out, outsize - 1);
+                    assert(size > 0);
+                    writen(g.outd, def, size - 1);
                     if (bits)
                         do {
-                            out[outsize - 1] += 2 << bits;
-                            writen(g.outd, out + outsize - 1, 1);
-                            out[outsize - 1] = 0;
+                            def[size - 1] += 2 << bits;
+                            writen(g.outd, def + size - 1, 1);
+                            def[size - 1] = 0;
                             bits += 2;
                         } while (bits < 8);
-                    writen(g.outd, out + outsize - 1, 1);
+                    writen(g.outd, def + size - 1, 1);
                 }
                 if (!g.setdict)             /* two markers when independent */
                     writen(g.outd, (unsigned char *)"\0\0\0\xff\xff", 5);
             }
             else
-                writen(g.outd, out, outsize);
-            free(out);
+                writen(g.outd, def, size);
+            free(def);
             while (got > MAXP2) {
                 check = CHECK(check, strm->next_in, MAXP2);
                 strm->next_in += MAXP2;
