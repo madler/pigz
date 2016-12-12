@@ -1,10 +1,10 @@
-.TH PIGZ 1 "October 1, 2016"
+.TH PIGZ 1 "December xx, 2016"
 .SH NAME
 pigz, unpigz \- compress or expand files
 .SH SYNOPSIS
 .ll +8
 .B pigz
-.RB [ " \-cdfhikKlLnNqrRtTz0..9,11 " ]
+.RB [ " \-cdfhikKlLmMnNqrRtz0..9,11 " ]
 [
 .B -b
 .I blocksize
@@ -23,7 +23,7 @@ pigz, unpigz \- compress or expand files
 .ll -8
 .br
 .B unpigz
-.RB [ " \-cfhikKlLnNqrRtTz " ]
+.RB [ " \-cfhikKlLmMnNqrRtz " ]
 [
 .B -b
 .I blocksize
@@ -155,11 +155,26 @@ Display the
 .I pigz
 license and quit.
 .TP
+.B -m --no-time
+Do not store or restore the modification time. -Nm will store or restore the
+name, but not the modification time. Note that the order of the options is
+important.
+.TP
+.B -M --time
+Store or restore the modification time. -nM will store or restore the
+modification time, but not the name. Note that the order of the options is
+important.
+.TP
 .B -n --no-name
-Do not store or restore file name in/from header.
+Do not store or restore the file name or the modification time. This is the
+default when decompressing. When the file name is not restored from the header,
+the name of the compressed file with the suffix stripped is the name of the
+decompressed file. When the modification time is not restored from the header,
+the modification time of the compressed file is used (not the current time).
 .TP
 .B -N --name
-Store/restore file name and mod time in/from header.
+Store or restore both the file name and the modification time. This is the
+default when compressing.
 .TP
 .B -p --processes n
 Allow up to n processes (default is the number of online processors)
@@ -178,9 +193,6 @@ Use suffix .sss instead of .gz (for compression).
 .TP
 .B -t --test
 Test the integrity of the compressed input.
-.TP
-.B -T --no-time
-Do not store or restore mod time in/from header.
 .TP
 .B -v --verbose
 Provide more verbose output.
@@ -202,7 +214,7 @@ Do iterations first, before block split (default is last).
 .B -I, --iterations n
 Number of iterations for optimization (default 15).
 .TP
-.B -M, --maxsplits n
+.B -J, --maxsplits n
 Maximum number of split blocks (default 15).
 .TP
 .B -O  --oneblock
