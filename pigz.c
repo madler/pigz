@@ -3913,6 +3913,7 @@ local char *helptext[] = {
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -l, --list           List the contents of the compressed input",
 "  -L, --license        Display the pigz license and quit",
+"  -m, --no-time        Do not store or restore mod time in/from header",
 "  -M, --maxsplits n    Maximum number of split blocks for -11",
 "  -n, --no-name        Do not store or restore file name in/from header",
 "  -N, --name           Store/restore file name and mod time in/from header",
@@ -3926,7 +3927,6 @@ local char *helptext[] = {
 "  -R, --rsyncable      Input-determined block locations for rsync",
 "  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
 "  -t, --test           Test the integrity of the compressed input",
-"  -T, --no-time        Do not store or restore mod time in/from header",
 #ifdef PIGZ_DEBUG
 "  -v, --verbose        Provide more verbose output (-vv to debug)",
 #else
@@ -4012,7 +4012,7 @@ local char *longopts[][2] = {
     {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"first", "F"},
     {"force", "f"}, {"help", "h"}, {"independent", "i"}, {"iterations", "I"},
     {"keep", "k"}, {"license", "L"}, {"list", "l"}, {"maxsplits", "M"},
-    {"name", "N"}, {"no-name", "n"}, {"no-time", "T"}, {"oneblock", "O"},
+    {"name", "N"}, {"no-name", "n"}, {"no-time", "m"}, {"oneblock", "O"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
     {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
     {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
@@ -4122,7 +4122,7 @@ local int option(char *arg)
             case 'O':  g.zopts.blocksplitting = 0;  break;
             case 'R':  g.rsync = 1;  break;
             case 'S':  get = 3;  break;
-            case 'T':  g.headis &= ~0xa;  break;
+                /* -T defined below as an alternative for -m */
             case 'V':
                 fputs(VERSION, stderr);
                 if (g.verbosity > 1)
@@ -4143,6 +4143,8 @@ local int option(char *arg)
             case 'k':  g.keep = 1;  break;
             case 'l':  g.list = 1;  break;
             case 'n':  g.headis &= ~5;  break;
+            case 'T':
+            case 'm':  g.headis &= ~0xa;  break;
             case 'p':  get = 2;  break;
             case 'q':  g.verbosity = 0;  break;
             case 'r':  g.recurse = 1;  break;
