@@ -3909,12 +3909,13 @@ local char *helptext[] = {
 "  -h, --help           Display a help screen and quit",
 "  -i, --independent    Compress blocks independently for damage recovery",
 "  -I, --iterations n   Number of iterations for -11 optimization",
+"  -J, --maxsplits n    Maximum number of split blocks for -11",
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -l, --list           List the contents of the compressed input",
 "  -L, --license        Display the pigz license and quit",
 "  -m, --no-time        Do not store or restore mod time",
-"  -M, --maxsplits n    Maximum number of split blocks for -11",
+"  -M, --time           Store or restore mod time",
 "  -n, --no-name        Do not store or restore file name or mod time",
 "  -N, --name           Store or restore file name and mod time",
 "  -O  --oneblock       Do not split into smaller blocks for -11",
@@ -4013,11 +4014,11 @@ local char *longopts[][2] = {
     {"LZW", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
     {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"first", "F"},
     {"force", "f"}, {"help", "h"}, {"independent", "i"}, {"iterations", "I"},
-    {"keep", "k"}, {"license", "L"}, {"list", "l"}, {"maxsplits", "M"},
+    {"keep", "k"}, {"license", "L"}, {"list", "l"}, {"maxsplits", "J"},
     {"name", "N"}, {"no-name", "n"}, {"no-time", "m"}, {"oneblock", "O"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
     {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
-    {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
+    {"time", "M"}, {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
     {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
@@ -4111,6 +4112,7 @@ local int option(char *arg)
                 break;
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
             case 'I':  get = 4;  break;
+            case 'J':  get = 5;  break;
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
@@ -4119,7 +4121,7 @@ local int option(char *arg)
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
                 exit(0);
-            case 'M':  get = 5;  break;
+            case 'M':  g.headis |= 0xa;  break;
             case 'N':  g.headis = 0xf;  break;
             case 'O':  g.zopts.blocksplitting = 0;  break;
             case 'R':  g.rsync = 1;  break;
@@ -4161,7 +4163,7 @@ local int option(char *arg)
             return 0;
     }
 
-    /* process option parameter for -b, -p, -S, -I, or -M */
+    /* process option parameter for -b, -p, -S, -I, or -J */
     if (get) {
         size_t n;
 
