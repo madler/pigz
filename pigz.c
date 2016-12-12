@@ -3913,10 +3913,10 @@ local char *helptext[] = {
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -l, --list           List the contents of the compressed input",
 "  -L, --license        Display the pigz license and quit",
-"  -m, --no-time        Do not store or restore mod time in/from header",
+"  -m, --no-time        Do not store or restore mod time",
 "  -M, --maxsplits n    Maximum number of split blocks for -11",
-"  -n, --no-name        Do not store or restore file name in/from header",
-"  -N, --name           Store/restore file name and mod time in/from header",
+"  -n, --no-name        Do not store or restore file name or mod time",
+"  -N, --name           Store or restore file name and mod time",
 "  -O  --oneblock       Do not split into smaller blocks for -11",
 #ifndef NOTHREAD
 "  -p, --processes n    Allow up to n compression threads (default is the",
@@ -3995,7 +3995,9 @@ local void defaults(void)
     g.rsync = 0;                    /* don't do rsync blocking */
     g.setdict = 1;                  /* initialize dictionary each thread */
     g.verbosity = 1;                /* normal message level */
-    g.headis = 3;                   /* store/restore name and timestamp */
+    g.headis = 3;                   /* store name and time (low bits == 11),
+                                       restore neither (next bits == 00),
+                                       where 01 is name and 10 is time */
     g.pipeout = 0;                  /* don't force output to stdout */
     g.sufx = ".gz";                 /* compressed file suffix */
     g.decode = 0;                   /* compress */
@@ -4118,7 +4120,7 @@ local int option(char *arg)
                 fputs("No warranty is provided or implied.\n", stderr);
                 exit(0);
             case 'M':  get = 5;  break;
-            case 'N':  g.headis |= 0xf;  break;
+            case 'N':  g.headis = 0xf;  break;
             case 'O':  g.zopts.blocksplitting = 0;  break;
             case 'R':  g.rsync = 1;  break;
             case 'S':  get = 3;  break;
@@ -4142,7 +4144,7 @@ local int option(char *arg)
             case 'i':  g.setdict = 0;  break;
             case 'k':  g.keep = 1;  break;
             case 'l':  g.list = 1;  break;
-            case 'n':  g.headis &= ~5;  break;
+            case 'n':  g.headis = 0;  break;
             case 'T':
             case 'm':  g.headis &= ~0xa;  break;
             case 'p':  get = 2;  break;
