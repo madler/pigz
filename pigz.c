@@ -398,9 +398,12 @@
                         /* lock, new_lock(), possess(), twist(), wait_for(),
                            release(), peek_lock(), free_lock(), yarn_name */
 #endif
-#include "zopfli/src/zopfli/deflate.h"  /* ZopfliDeflatePart(),
-                                           ZopfliInitOptions(),
-                                           ZopfliOptions */
+
+#ifndef NOZOPFLI
+#  include "zopfli/src/zopfli/deflate.h"    /* ZopfliDeflatePart(),
+                                               ZopfliInitOptions(),
+                                               ZopfliOptions */
+#endif
 
 #include "try.h"        /* try, catch, always, throw, drop, punt, ball_t */
 
@@ -512,7 +515,9 @@ local struct {
     int first;              /* true if we need to print listing header */
     int decode;             /* 0 to compress, 1 to decompress, 2 to test */
     int level;              /* compression level */
+#ifndef NOZOPFLI
     ZopfliOptions zopts;    /* zopfli compression options */
+#endif
     int rsync;              /* true for rsync blocking */
     int procs;              /* maximum number of compression threads (>= 1) */
     int setdict;            /* true to initialize dictionary in each thread */
@@ -1623,7 +1628,9 @@ local void compress_thread(void *dummy)
 #if ZLIB_VERNUM >= 0x1260
     int bits;                       /* deflate pending bits */
 #endif
+#ifndef NOZOPFLI
     struct space *temp = NULL;      /* temporary space for zopfli input */
+#endif
     int ret;                        /* zlib return code */
     z_stream strm;                  /* deflate stream */
     ball_t err;                     /* error information from throw() */
@@ -1659,15 +1666,19 @@ local void compress_thread(void *dummy)
                if deflateParams() is called immediately after deflateReset(),
                there is no need to initialize input/output for the stream) */
             Trace(("-- compressing #%ld", job->seq));
+#ifndef NOZOPFLI
             if (g.level <= 9) {
+#endif
                 (void)deflateReset(&strm);
                 (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
+#ifndef NOZOPFLI
             }
             else {
                 if (temp == NULL)
                     temp = get_space(&out_pool);
                 temp->len = 0;
             }
+#endif
 
             /* set dictionary if provided, release that input or dictionary
                buffer (not NULL if g.setdict is true and if this is not the
@@ -1675,24 +1686,32 @@ local void compress_thread(void *dummy)
             if (job->out != NULL) {
                 len = job->out->len;
                 left = len < DICT ? len : DICT;
+#ifndef NOZOPFLI
                 if (g.level <= 9)
+#endif
                     deflateSetDictionary(&strm, job->out->buf + (len - left),
                                          (unsigned)left);
+#ifndef NOZOPFLI
                 else {
                     memcpy(temp->buf, job->out->buf + (len - left), left);
                     temp->len = left;
                 }
+#endif
                 drop_space(job->out);
             }
 
             /* set up input and output */
             job->out = get_space(&out_pool);
+#ifndef NOZOPFLI
             if (g.level <= 9) {
+#endif
                 strm.next_in = job->in->buf;
                 strm.next_out = job->out->buf;
+#ifndef NOZOPFLI
             }
             else
                 memcpy(temp->buf + temp->len, job->in->buf, job->in->len);
+#endif
 
             /* compress each block, either flushing or finishing */
             next = job->lens == NULL ? NULL : job->lens->buf;
@@ -1718,7 +1737,9 @@ local void compress_thread(void *dummy)
                 }
                 left -= len;
 
+#ifndef NOZOPFLI
                 if (g.level <= 9) {
+#endif
                     /* run MAXP2-sized amounts of input through deflate -- this
                        loop is needed for those cases where the unsigned type
                        is smaller than the size_t type, or when len is close to
@@ -1757,6 +1778,7 @@ local void compress_thread(void *dummy)
                     }
                     else
                         deflate_engine(&strm, job->out, Z_FINISH);
+#ifndef NOZOPFLI
                 }
                 else {
                     /* compress len bytes using zopfli, end at byte boundary */
@@ -1800,6 +1822,7 @@ local void compress_thread(void *dummy)
                     }
                     temp->len += len;
                 }
+#endif
             } while (left);
             drop_space(job->lens);
             job->lens = NULL;
@@ -1843,7 +1866,9 @@ local void compress_thread(void *dummy)
         }
 
         /* found job with seq == -1 -- return to join */
+#ifndef NOZOPFLI
         drop_space(temp);
+#endif
         release(compress_have);
         (void)deflateEnd(&strm);
     }
@@ -2215,10 +2240,14 @@ local void single_compress(int reset)
     head = put_header();
 
     /* set compression level in case it changed */
+#ifndef NOZOPFLI
     if (g.level <= 9) {
+#endif
         (void)deflateReset(strm);
         (void)deflateParams(strm, g.level, Z_DEFAULT_STRATEGY);
+#ifndef NOZOPFLI
     }
+#endif
 
     /* do raw deflate and calculate check value */
     got = 0;
@@ -2302,7 +2331,9 @@ local void single_compress(int reset)
             }
         }
 
+#ifndef NOZOPFLI
         if (g.level <= 9) {
+#endif
             /* clear history if requested */
             if (fresh)
                 (void)deflateReset(strm);
@@ -2343,6 +2374,7 @@ local void single_compress(int reset)
             }
             else
                 DEFLATE_WRITE(Z_FINISH);
+#ifndef NOZOPFLI
         }
         else {
             /* compress got bytes using zopfli, bring to byte boundary */
@@ -2395,6 +2427,7 @@ local void single_compress(int reset)
             strm->next_in += got;
             got = left;
         }
+#endif
 
         /* do until no more input */
     } while (more || got);
@@ -3899,17 +3932,25 @@ local char *helptext[] = {
 #endif
 "",
 "Options:",
+#ifdef NOZOPFLI
+"  -0 to -9             Compression level",
+#else
 "  -0 to -9, -11        Compression level (level 11, zopfli, is much slower)",
+#endif
 "  --fast, --best       Compression levels 1 and 9 respectively",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
 "  -d, --decompress     Decompress the compressed input",
 "  -f, --force          Force overwrite, compress .gz, links, and to terminal",
+#ifndef NOZOPFLI
 "  -F  --first          Do iterations first, before block split for -11",
+#endif
 "  -h, --help           Display a help screen and quit",
 "  -i, --independent    Compress blocks independently for damage recovery",
+#ifndef NOZOPFLI
 "  -I, --iterations n   Number of iterations for -11 optimization",
 "  -J, --maxsplits n    Maximum number of split blocks for -11",
+#endif
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -l, --list           List the contents of the compressed input",
@@ -3918,7 +3959,9 @@ local char *helptext[] = {
 "  -M, --time           Store or restore mod time",
 "  -n, --no-name        Do not store or restore file name or mod time",
 "  -N, --name           Store or restore file name and mod time",
+#ifndef NOZOPFLI
 "  -O  --oneblock       Do not split into smaller blocks for -11",
+#endif
 #ifndef NOTHREAD
 "  -p, --processes n    Allow up to n compression threads (default is the",
 "                       number of online processors, or 8 if unknown)",
@@ -3979,6 +4022,7 @@ local int nprocs(int n)
 local void defaults(void)
 {
     g.level = Z_DEFAULT_COMPRESSION;
+#ifndef NOZOPFLI
     /* default zopfli options as set by ZopfliInitOptions():
         verbose = 0
         numiterations = 15
@@ -3987,6 +4031,7 @@ local void defaults(void)
         blocksplittingmax = 15
      */
     ZopfliInitOptions(&g.zopts);
+#endif
 #ifdef NOTHREAD
     g.procs = 1;
 #else
@@ -4012,10 +4057,12 @@ local void defaults(void)
 /* long options conversion to short options */
 local char *longopts[][2] = {
     {"LZW", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
-    {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"first", "F"},
-    {"force", "f"}, {"help", "h"}, {"independent", "i"}, {"iterations", "I"},
-    {"keep", "k"}, {"license", "L"}, {"list", "l"}, {"maxsplits", "J"},
-    {"name", "N"}, {"no-name", "n"}, {"no-time", "m"}, {"oneblock", "O"},
+    {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"force", "f"},
+#ifndef NOZOPFLI
+    {"first", "F"}, {"iterations", "I"}, {"maxsplits", "J"}, {"oneblock", "O"},
+#endif
+    {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
+    {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "m"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
     {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
     {"time", "M"}, {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
@@ -4110,9 +4157,11 @@ local int option(char *arg)
                     throw(EINVAL, "only levels 0..9 and 11 are allowed");
                 new_opts();
                 break;
+#ifndef NOZOPFLI
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
             case 'I':  get = 4;  break;
             case 'J':  get = 5;  break;
+#endif
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
@@ -4123,7 +4172,9 @@ local int option(char *arg)
                 exit(0);
             case 'M':  g.headis |= 0xa;  break;
             case 'N':  g.headis = 0xf;  break;
+#ifndef NOZOPFLI
             case 'O':  g.zopts.blocksplitting = 0;  break;
+#endif
             case 'R':  g.rsync = 1;  break;
             case 'S':  get = 3;  break;
                 /* -T defined below as an alternative for -m */
@@ -4194,10 +4245,12 @@ local int option(char *arg)
         }
         else if (get == 3)
             g.sufx = arg;                       /* gz suffix */
+#ifndef NOZOPFLI
         else if (get == 4)
             g.zopts.numiterations = (int)num(arg);  /* optimize iterations */
         else if (get == 5)
             g.zopts.blocksplittingmax = (int)num(arg);  /* max block splits */
+#endif
         get = 0;
         return 0;
     }

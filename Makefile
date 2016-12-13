@@ -33,7 +33,13 @@ ${ZOPFLI}squeeze.o: ${ZOPFLI}squeeze.c ${ZOPFLI}squeeze.h ${ZOPFLI}blocksplitter
 
 ${ZOPFLI}katajainen.o: ${ZOPFLI}katajainen.c ${ZOPFLI}katajainen.h
 
-dev: pigz pigzt pigzn
+dev: pigz pigzj pigzt pigzn
+
+pigzj: pigzj.o yarn.o try.o
+	$(CC) $(LDFLAGS) -o pigzj $^ $(LIBS)
+
+pigzj.o: pigz.c yarn.h try.h
+	$(CC) $(CFLAGS) -DNOZOPFLI -c -o pigzj.o pigz.c
 
 pigzt: pigzt.o yarnt.o try.o ${ZOPFLI}deflate.o ${ZOPFLI}blocksplitter.o ${ZOPFLI}tree.o ${ZOPFLI}lz77.o ${ZOPFLI}cache.o ${ZOPFLI}hash.o ${ZOPFLI}util.o ${ZOPFLI}squeeze.o ${ZOPFLI}katajainen.o
 	$(CC) $(LDFLAGS) -o pigzt $^ $(LIBS)
@@ -82,4 +88,4 @@ pigz.pdf: pigz.1
 	groff -mandoc -f H -T ps pigz.1 | ps2pdf - pigz.pdf
 
 clean:
-	@rm -f *.o ${ZOPFLI}*.o pigz unpigz pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
+	@rm -f *.o ${ZOPFLI}*.o pigz unpigz pigzj pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
