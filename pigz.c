@@ -390,7 +390,7 @@
                            Z_DEFAULT_STRATEGY, Z_DEFLATED, Z_NO_FLUSH, Z_NULL,
                            Z_OK, Z_SYNC_FLUSH, z_stream */
 #if !defined(ZLIB_VERNUM) || ZLIB_VERNUM < 0x1230
-#  error Need zlib version 1.2.3 or later
+#  error "Need zlib version 1.2.3 or later"
 #endif
 
 #ifndef NOTHREAD
