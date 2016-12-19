@@ -98,5 +98,7 @@ docs: pigz.pdf
 pigz.pdf: pigz.1
 	groff -mandoc -f H -T ps pigz.1 | ps2pdf - pigz.pdf
 
+all: pigz pigzj pigzt pigzn docs
+
 clean:
 	@rm -f *.o pigz unpigz pigzj pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
