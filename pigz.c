@@ -4028,7 +4028,11 @@ local int option(char *arg)
             case 'i':  g.setdict = 0;  break;
             case 'k':  g.keep = 1;  break;
             case 'l':  g.list = 1;  break;
-            case 'n':  g.headis &= ~5;  break;
+            case 'n':
+                g.headis &= ~5;
+                if (strcmp(g.prog, "gzip") == 0)
+                    g.headis &= ~0xa;
+                break;
             case 'p':  get = 2;  break;
             case 'q':  g.verbosity = 0;  break;
             case 'r':  g.recurse = 1;  break;
