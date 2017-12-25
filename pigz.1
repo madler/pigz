@@ -95,6 +95,10 @@ or
 .B -tp 1
 ).
 .PP
+All options on the command line are processed before any names are processed.
+If no names are provided on the command line, or if "-" is given as a name (but
+not after "--"), then the input is taken from stdin.
+.PP
 Compressed files can be restored to their original form using
 .I pigz -d
 or

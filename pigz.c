@@ -4087,7 +4087,7 @@ local size_t num(char *arg) {
     return val;
 }
 
-// Process an option, return true if a file name and not an option.
+// Process an argument, return true if it is an option (not a filename)
 local int option(char *arg) {
     static int get = 0;     // if not zero, look for option parameter
     char bad[3] = "-X";     // for error messages (X is replaced)
@@ -4098,13 +4098,13 @@ local int option(char *arg) {
         throw(EINVAL, "missing parameter after %s", bad);
     }
     if (arg == NULL)
-        return 0;
+        return 1;
 
     // process long option or short options
     if (*arg == '-') {
         // a single dash will be interpreted as stdin
         if (*++arg == 0)
-            return 1;
+            return 0;
 
         // process long option (fall through with equivalent short option)
         if (*arg == '-') {
@@ -4144,7 +4144,6 @@ local int option(char *arg) {
                 }
                 if (g.level == 10 || g.level > 11)
                     throw(EINVAL, "only levels 0..9 and 11 are allowed");
-                new_opts();
                 break;
 #ifndef NOZOPFLI
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
@@ -4200,7 +4199,7 @@ local int option(char *arg) {
             }
         } while (*++arg);
         if (*arg == 0)
-            return 0;
+            return 1;
     }
 
     // process option parameter for -b, -p, -S, -I, or -J
@@ -4217,7 +4216,6 @@ local int option(char *arg) {
                 (ssize_t)OUTPOOL(g.block) < 0 ||
                 g.block > (1UL << 29))          // limited by append_len()
                 throw(EINVAL, "block size too large: %s", arg);
-            new_opts();
         }
         else if (get == 2) {
             n = num(arg);
@@ -4230,7 +4228,6 @@ local int option(char *arg) {
             if (g.procs > 1)
                 throw(EINVAL, "compiled without threads");
 #endif
-            new_opts();
         }
         else if (get == 3)
             g.sufx = arg;                       // gz suffix
@@ -4241,11 +4238,11 @@ local int option(char *arg) {
             g.zopts.blocksplittingmax = (int)num(arg);  // max block splits
 #endif
         get = 0;
-        return 0;
+        return 1;
     }
 
     // neither an option nor parameter
-    return 1;
+    return 0;
 }
 
 #ifndef NOTHREAD
@@ -4258,8 +4255,8 @@ local void cut_yarn(int err) {
 // Process command line arguments.
 int main(int argc, char **argv) {
     int n;                          // general index
-    int noop;                       // true to suppress option decoding
-    unsigned long done;             // number of named files processed
+    int nop;                        // index before which "-" means stdin
+    int done;                       // number of named files processed
     size_t k;                       // program name length
     char *opts, *p;                 // environment default options, marker
     ball_t err;                     // error information from throw()
@@ -4309,12 +4306,12 @@ int main(int argc, char **argv) {
                     p++;
                 n = *p;
                 *p = 0;
-                if (option(opts))
+                if (!option(opts))
                     throw(EINVAL, "cannot provide files in "
                                   "GZIP environment variable");
                 opts = p + (n ? 1 : 0);
             }
-            option(NULL);
+            option(NULL);           // check for missing parameter
         }
 
         // process user environment variable defaults in PIGZ as well
@@ -4328,12 +4325,12 @@ int main(int argc, char **argv) {
                     p++;
                 n = *p;
                 *p = 0;
-                if (option(opts))
+                if (!option(opts))
                     throw(EINVAL, "cannot provide files in "
                                   "PIGZ environment variable");
                 opts = p + (n ? 1 : 0);
             }
-            option(NULL);
+            option(NULL);           // check for missing parameter
         }
 
         // decompress if named "unpigz" or "gunzip", to stdout if "*cat"
@@ -4353,25 +4350,29 @@ int main(int argc, char **argv) {
         if (argc < 2 && isatty(g.decode ? 0 : 1))
             help();
 
-        // process command-line arguments
-        done = noop = 0;
+        // process all command-line options first
+        nop = argc;
         for (n = 1; n < argc; n++)
-            // ignore options after "--"
-            if (noop == 0 && strcmp(argv[n], "--") == 0) {
-                noop = 1;
-                option(NULL);
+            if (strcmp(argv[n], "--") == 0) {
+                nop = n;                // after this, "-" is the name "-"
+                argv[n] = NULL;         // remove option
+                break;                  // ignore options after "--"
             }
-            // process argument, interpreting if option
-            else if (noop || option(argv[n])) {
-                // argv[n] is a name to process
+            else if (option(argv[n]))   // process argument
+                argv[n] = NULL;         // remove if option
+        option(NULL);                   // check for missing parameter
+
+        // process command-line filenames
+        done = 0;
+        for (n = 1; n < argc; n++)
+            if (argv[n] != NULL) {
                 if (done == 1 && g.pipeout && !g.decode && !g.list &&
                     g.form > 1)
                     complain("warning: output will be concatenated zip files"
                              " -- %s will not be able to extract", g.prog);
-                process(strcmp(argv[n], "-") ? argv[n] : NULL);
+                process(n < nop && strcmp(argv[n], "-") == 0 ? NULL : argv[n]);
                 done++;
             }
-        option(NULL);
 
         // list stdin or compress stdin to stdout if no file names provided
         if (done == 0)
