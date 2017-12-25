@@ -23,12 +23,6 @@
   Mark Adler
   madler@alumni.caltech.edu
 
-  Mark accepts donations for providing this software.  Donations are not
-  required or expected.  Any amount that you feel is appropriate would be
-  appreciated.  You can use this link:
-
-  https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=536055
-
  */
 
 /* Version history:

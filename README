@@ -4,7 +4,10 @@ pigz, which stands for Parallel Implementation of GZip, is a fully functional
 replacement for gzip that exploits multiple processors and multiple cores to
 the hilt when compressing data.
 
-pigz was written by Mark Adler, and uses the zlib and pthread libraries.
+pigz was written by Mark Adler and does not include third-party code. I am
+making my contributions to and distributions of this project solely in my
+personal capacity, and am not conveying any rights to any intellectual property
+of any third parties.
 
 This version of pigz is written to be portable across Unix-style operating
 systems that provide the zlib and pthread libraries.
@@ -42,9 +45,3 @@ The license from pigz.c is copied here:
 
   Mark Adler
   madler@alumni.caltech.edu
-
-  Mark accepts donations for providing this software.  Donations are not
-  required or expected.  Any amount that you feel is appropriate would be
-  appreciated.  You can use this link:
-
-  https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=536055
