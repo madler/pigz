@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007-2016 Mark Adler
- * Version 2.3.5  xx Dec 2016  Mark Adler
+ * Copyright (C) 2007-2017 Mark Adler
+ * Version 2.3.5  xx Dec 2017  Mark Adler
  */
 
 /*
@@ -175,7 +175,7 @@
                        Permit named pipes as input (e.g. made by mkfifo())
                        Fix a bug in -r directory traversal
                        Add warning for a zip file entry 4 GiB or larger
-   2.3.5  xx Dec 2016  -
+   2.3.5  xx Dec 2017  -
  */
 
 #define VERSION "pigz 2.3.5x\n"
@@ -4226,7 +4226,7 @@ local int option(char *arg)
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007-2016 Mark Adler\n", stderr);
+                fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
                 fputs("No warranty is provided or implied.\n", stderr);
