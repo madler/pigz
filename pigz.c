@@ -4076,7 +4076,7 @@ local void defaults(void) {
 
 // Long options conversion to short options.
 local char *longopts[][2] = {
-    {"LZW", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
+    {"LZW", "Z"}, {"lzw", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
     {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"force", "f"},
 #ifndef NOZOPFLI
     {"first", "F"}, {"iterations", "I"}, {"maxsplits", "J"}, {"oneblock", "O"},
