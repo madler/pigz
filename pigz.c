@@ -3574,6 +3574,9 @@ local char *justname(char *path) {
     return p == NULL ? path : p + 1;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-result"
+
 // Copy file attributes, from -> to, as best we can. This is best effort, so no
 // errors are reported. The mode bits, including suid, sgid, and the sticky bit
 // are copied (if allowed), the owner's user id and group id are copied (again
@@ -3599,6 +3602,8 @@ local void copymeta(char *from, char *to) {
     times[1].tv_usec = 0;
     (void)utimes(to, times);
 }
+
+#pragma GCC diagnostic pop
 
 // Set the access and modify times of fd to t.
 local void touch(char *path, time_t t) {

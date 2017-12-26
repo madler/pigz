@@ -1,5 +1,5 @@
-CC=cc
-CFLAGS=-O3 -Wall -Wextra
+CC=gcc
+CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas
 LDFLAGS=
 LIBS=-lm -lpthread -lz
 ZOPFLI=zopfli/src/zopfli/
