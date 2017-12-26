@@ -333,9 +333,9 @@
                         // S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
 #include <sys/time.h>   // utimes(), gettimeofday(), struct timeval
 #include <unistd.h>     // unlink(), _exit(), read(), write(), close(),
-                        // lseek(), isatty(), chown()
+                        // lseek(), isatty(), chown(), fsync()
 #include <fcntl.h>      // open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
-                        // O_WRONLY
+                        // O_WRONLY, fcntl(), F_FULLFSYNC
 #include <dirent.h>     // opendir(), readdir(), closedir(), DIR,
                         // struct dirent
 #include <limits.h>     // UINT_MAX, INT_MAX
@@ -499,6 +499,7 @@ local struct {
     int pipeout;            // write output to stdout even if file
     int keep;               // true to prevent deletion of input file
     int force;              // true to overwrite, compress links, cat
+    int sync;               // true to flush output file
     int form;               // gzip = 0, zlib = 1, zip = 2 or 3
     unsigned char magic1;   // first byte of possible header when decoding
     int recurse;            // true to dive down into directory structure
@@ -3610,6 +3611,29 @@ local void touch(char *path, time_t t) {
     (void)utimes(path, times);
 }
 
+// Request that all data buffered by the operating system for g.outd be written
+// to the permanent storage device. If fsync(fd) is used (POSIX), then all of
+// the data is sent to the device, but will likely be buffered in volatile
+// memory on the device itself, leaving open a window of vulnerability.
+// fcntl(fd, F_FULLSYNC) on the other hand, available in macOS only, will
+// request and wait for the device to write out its buffered data to permanent
+// storage.
+//
+// For a future Windows port of pigz, winbase.h should be included and
+// FlushFileBuffers() used, which also waits for the device write out its
+// buffered data to permanent storage.
+local void out_push(void) {
+    if (g.outd == -1)
+        return;
+#ifdef F_FULLSYNC
+    int ret = fcntl(g.outd, F_FULLSYNC);
+#else
+    int ret = fsync(g.outd);
+#endif
+    if (ret == -1)
+        throw(errno, "sync error on %s (%s)", g.outf, strerror(errno));
+}
+
 // Process provided input file, or stdin if path is NULL. process() can call
 // itself for recursive directory processing.
 local void process(char *path) {
@@ -3903,6 +3927,8 @@ local void process(char *path) {
     // finish up, copy attributes, set times, delete original
     load_end();
     if (g.outd != -1 && g.outd != 1) {
+        if (g.sync)
+            out_push();         // push to permanent storage
         if (close(g.outd))
             throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
         g.outd = -1;            // now prevent deletion on interrupt
@@ -3973,6 +3999,7 @@ local char *helptext[] = {
 "  -v, --verbose        Provide more verbose output",
 #endif
 "  -V  --version        Show the version of pigz",
+"  -Y  --synchronous    Force output file write to permanent storage",
 "  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
 "  --                   All arguments after \"--\" are treated as files"
 };
@@ -4042,6 +4069,7 @@ local void defaults(void) {
     g.list = 0;                     // compress
     g.keep = 0;                     // delete input file once compressed
     g.force = 0;                    // don't overwrite, don't compress links
+    g.sync = 0;                     // don't force a flush on output
     g.recurse = 0;                  // don't go into directories
     g.form = 0;                     // use gzip format
 }
@@ -4056,9 +4084,9 @@ local char *longopts[][2] = {
     {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
     {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "m"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
-    {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"test", "t"},
-    {"time", "M"}, {"to-stdout", "c"}, {"uncompress", "d"}, {"verbose", "v"},
-    {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
+    {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"synchronous", "Y"},
+    {"test", "t"}, {"time", "M"}, {"to-stdout", "c"}, {"uncompress", "d"},
+    {"verbose", "v"}, {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
 // Either new buffer size, new compression level, or new number of processes.
@@ -4171,6 +4199,7 @@ local int option(char *arg) {
                 if (g.verbosity > 1)
                     fprintf(stderr, "zlib %s\n", zlibVersion());
                 exit(0);
+            case 'Y':  g.sync = 1;  break;
             case 'Z':
                 throw(EINVAL, "invalid option: LZW output not supported: %s",
                       bad);
