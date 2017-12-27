@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007-2017 Mark Adler
- * Version 2.3.5  xx Dec 2017  Mark Adler
+ * Version 2.4  26 Dec 2017  Mark Adler
  */
 
 /*
@@ -175,10 +175,20 @@
                        Permit named pipes as input (e.g. made by mkfifo())
                        Fix a bug in -r directory traversal
                        Add warning for a zip file entry 4 GiB or larger
-   2.3.5  xx Dec 2017  -
+   2.4    26 Dec 2017  Portability improvements
+                       Produce Zip64 format when needed for --zip (>= 4 GiB)
+                       Make -no-name compatible with gzip, add --time option
+                       Add -m as a short option for --no-time
+                       Check run-time zlib version to handle weak linking
+                       Fix a concurrent read bug in --list operation
+                       Process options first, for gzip compatibility
+                       Add --synchronous (-Y) option to force device write
+                       Disallow an empty suffix (e.g. --suffix '')
+                       Return an exit code of 1 if any issues are encountered
+                       Fix sign error in compression reduction percentage
  */
 
-#define VERSION "pigz 2.3.5x\n"
+#define VERSION "pigz 2.4\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
