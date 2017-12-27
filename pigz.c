@@ -4263,8 +4263,11 @@ local int option(char *arg) {
                 throw(EINVAL, "compiled without threads");
 #endif
         }
-        else if (get == 3)
+        else if (get == 3) {
+            if (*arg == 0)
+                throw(EINVAL, "suffix cannot be empty");
             g.sufx = arg;                       // gz suffix
+        }
 #ifndef NOZOPFLI
         else if (get == 4)
             g.zopts.numiterations = (int)num(arg);  // optimize iterations
