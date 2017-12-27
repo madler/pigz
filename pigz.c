@@ -488,6 +488,7 @@
 
 // Globals (modified by main thread only when it's the only thread).
 local struct {
+    int volatile ret;       // pigz return code
     char *prog;             // name by which pigz was invoked
     int ind;                // input file descriptor
     int outd;               // output file descriptor
@@ -557,6 +558,7 @@ local int complain(char *fmt, ...) {
         putc('\n', stderr);
         fflush(stderr);
     }
+    g.ret = 1;
     return 0;
 }
 
@@ -2572,6 +2574,7 @@ local void in_init(void) {
 // Buffered reading macros for decompression and listing.
 #define GET() (g.in_left == 0 && (g.in_eof || load() == 0) ? 0 : \
                (g.in_left--, *g.in_next++))
+#define UNGET(n) (g.in_left += (n), g.in_next -= (n))
 #define GET2() (tmp2 = GET(), tmp2 + ((unsigned)(GET()) << 8))
 #define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
 #define SKIP(dist) \
@@ -2683,14 +2686,17 @@ local int read_extra(unsigned len, int save) {
     return 0;
 }
 
-// Read a gzip, zip, zlib, or lzw header from ind and return the method in the
-// range 0..256 (256 implies a zip method greater than 255), or on error return
-// negative: -1 is immediate EOF, -2 is not a recognized compressed format, -3
-// is premature EOF within the header, -4 is unexpected header flag values, -5
-// is the zip central directory, -6 is a failed gzip header crc check; a method
-// of 257 is lzw. If the return value is not negative, then get_header() sets
-// g.form to indicate gzip (0), zlib (1), or zip (2, or 3 if the entry is
-// followed by a data descriptor).
+// Read a gzip, zip, zlib, or Unix compress header from ind and return the
+// compression method in the range 0..257. 8 is deflate, 256 is a zip method
+// greater than 255, and 257 is LZW (compress). The only methods decompressed
+// by pigz are 8 and 257. On error, return negative: -1 is immediate EOF, -2 is
+// not a recognized compressed format (considering only the first two bytes of
+// input), -3 is premature EOF within the header, -4 is unexpected header flag
+// values, -5 is the zip central directory, and -6 is a failed gzip header crc
+// check. If -2 is returned, the input pointer has been reset to the beginning.
+// If the return value is not negative, then get_header() sets g.form to
+// indicate gzip (0), zlib (1), or zip (2, or 3 if the entry is followed by a
+// data descriptor), and the input points to the first byte of compressed data.
 local int get_header(int save) {
     unsigned magic;             // magic header
     unsigned method;            // compression method
@@ -2713,8 +2719,10 @@ local int get_header(int save) {
         return -1;
     magic = (unsigned)g.magic1 << 8;
     magic += GET();
-    if (g.in_eof)
+    if (g.in_eof) {
+        UNGET(1);
         return -2;
+    }
     if (magic % 31 == 0 && (magic & 0x8f20) == 0x0800) {
         // it's zlib
         g.form = 1;
@@ -2772,8 +2780,7 @@ local int get_header(int save) {
         return g.in_eof ? -3 : (int)method;
     }
     if (magic != 0x1f8b) {          // not gzip
-        g.in_left++;    // unget second magic byte
-        g.in_next--;
+        UNGET(2);
         return -2;
     }
 
@@ -2965,9 +2972,9 @@ local void list_info(void) {
     // read header information and position input after header
     method = get_header(1);
     if (method < 0) {
-        if (method != -1 && g.verbosity > 1)
-            complain(method != -6 ? "skipping: %s not compressed" :
-                     "skipping: %s corrupted: invalid header crc", g.inf);
+        complain(method == -6 ? "skipping: %s corrupt: header crc error" :
+                 method == -1 ? "skipping: %s empty" :
+                 "skipping: %s unrecognized format", g.inf);
         return;
     }
 
@@ -3072,12 +3079,7 @@ local void list_info(void) {
 // --- copy input to output (when acting like cat) ---
 
 local void cat(void) {
-    // write first magic byte (if we're here, there's at least one byte)
-    g.out_tot = writen(g.outd, &g.magic1, 1);
-
-    // copy the remainder of the input to the output (if there were any more
-    // bytes of input, then g.in_left is non-zero and g.in_next is pointing to
-    // the second magic byte)
+    // copy the remainder of the input to the output
     while (g.in_left) {
         g.out_tot += writen(g.outd, g.in_next, g.in_left);
         g.in_left = 0;
@@ -3779,14 +3781,13 @@ local void process(char *path) {
         method = get_header(1);
         if (method != 8 && method != 257 &&
                 // gzip -cdf acts like cat on uncompressed input
-                !(method == -2 && g.force && g.pipeout && g.decode != 2 &&
-                  !g.list)) {
+                !((method == -1 || method == -2) && g.force && g.pipeout &&
+                  g.decode != 2 && !g.list)) {
             load_end();
-            if (method != -1)
-                complain(method < 0 ?
-                            method != -6 ? "skipping: %s is not compressed" :
-                                "skipping: %s corrupted: invalid header crc" :
-                         "skipping: %s has unknown compression method", g.inf);
+            complain(method == -6 ? "skipping: %s corrupt: header crc error" :
+                     method == -1 ? "skipping: %s empty" :
+                     method < 0 ? "skipping: %s unrecognized format" :
+                     "skipping: %s unknown compression method", g.inf);
             return;
         }
 
@@ -4298,6 +4299,7 @@ int main(int argc, char **argv) {
     char *opts, *p;                 // environment default options, marker
     ball_t err;                     // error information from throw()
 
+    g.ret = 0;
     try {
         // initialize globals
         g.inf = NULL;
@@ -4427,5 +4429,5 @@ int main(int argc, char **argv) {
 
     // show log (if any)
     log_dump();
-    return 0;
+    return g.ret;
 }
