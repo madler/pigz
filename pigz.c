@@ -2930,6 +2930,8 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
             printf("gzip%2d  %08lx  %s  ", method, check, mod + 4);
     }
     if (g.verbosity > 0) {
+        // compute reduction percent -- allow divide-by-zero, displays as -inf%
+        double red = 100. * (len - (double)g.in_tot) / len;
         if ((g.form == 3 && !g.decode) ||
             (method == 8 && g.in_tot > (len + (len >> 10) + 12)) ||
             (method == 257 && g.in_tot > len + (len >> 1) + 3))
@@ -2938,9 +2940,7 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
                    (intmax_t)g.in_tot, (intmax_t)len, tag);
         else
             printf("%10jd %10jd %6.1f%%  %s\n",
-                   (intmax_t)g.in_tot, (intmax_t)len,
-                   len == 0 ? 0 : 100 * (len - g.in_tot)/(double)len,
-                   tag);
+                   (intmax_t)g.in_tot, (intmax_t)len, red, tag);
 #else
             printf(sizeof(off_t) == sizeof(long) ?
                    "%10ld %10ld?  unk    %s\n" : "%10lld %10lld?  unk    %s\n",
@@ -2948,9 +2948,7 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
         else
             printf(sizeof(off_t) == sizeof(long) ?
                    "%10ld %10ld %6.1f%%  %s\n" : "%10lld %10lld %6.1f%%  %s\n",
-                   g.in_tot, len,
-                   len == 0 ? 0 : 100 * (len - g.in_tot)/(double)len,
-                   tag);
+                   g.in_tot, len, red, tag);
 #endif
     }
 }
