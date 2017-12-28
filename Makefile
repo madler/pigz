@@ -3,7 +3,7 @@ CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas
 LDFLAGS=
 LIBS=-lm -lpthread -lz
 ZOPFLI=zopfli/src/zopfli/
-ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o
+ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o symbols.o
 
 # use gcc and gmake on Solaris
 
@@ -43,6 +43,9 @@ squeeze.o: $(ZOPFLI)squeeze.c $(ZOPFLI)squeeze.h $(ZOPFLI)blocksplitter.h $(ZOPF
 
 katajainen.o: $(ZOPFLI)katajainen.c $(ZOPFLI)katajainen.h
 	$(CC) $(CFLAGS) -c $(ZOPFLI)katajainen.c
+
+symbols.o: $(ZOPFLI)symbols.c $(ZOPFLI)symbols.h
+	$(CC) $(CFLAGS) -c $(ZOPFLI)symbols.c
 
 dev: pigz pigzj pigzt pigzn
 
