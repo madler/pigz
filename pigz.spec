@@ -1,6 +1,6 @@
 Summary: pigz is a parallel implementation of gzip which utilizes multiple cores
 Name: pigz
-Version: 2.4
+Version: 2.4.1x
 Release: 1
 Source0: %{name}-%{version}.tar.gz
 License: zlib

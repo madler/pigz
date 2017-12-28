@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007-2017 Mark Adler
- * Version 2.4  26 Dec 2017  Mark Adler
+ * Version 2.4.1x  xx Dec 2017  Mark Adler
  */
 
 /*
@@ -188,7 +188,7 @@
                        Fix sign error in compression reduction percentage
  */
 
-#define VERSION "pigz 2.4\n"
+#define VERSION "pigz 2.4.1x\n"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)

@@ -1,4 +1,4 @@
-pigz 2.4 (26 Dec 2017) by Mark Adler
+pigz 2.4.1x (xx Dec 2017) by Mark Adler
 
 pigz, which stands for Parallel Implementation of GZip, is a fully functional
 replacement for gzip that exploits multiple processors and multiple cores to
