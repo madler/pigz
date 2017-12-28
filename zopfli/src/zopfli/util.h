@@ -32,6 +32,10 @@ basic deflate specification values and generic program options.
 #define ZOPFLI_MAX_MATCH 258
 #define ZOPFLI_MIN_MATCH 3
 
+/* Number of distinct literal/length and distance symbols in DEFLATE */
+#define ZOPFLI_NUM_LL 288
+#define ZOPFLI_NUM_D 32
+
 /*
 The window size for deflate. Must be a power of two. This should be 32768, the
 maximum possible by the deflate spec. Anything less hurts compression more than
@@ -51,9 +55,9 @@ operating on huge files without exceeding memory, such as the 1GB wiki9 corpus.
 The whole compression algorithm, including the smarter block splitting, will
 be executed independently on each huge block.
 Dividing into huge blocks hurts compression, but not much relative to the size.
-Set this to, for example, 20MB (20000000). Set it to 0 to disable master blocks.
+Set it to 0 to disable master blocks.
 */
-#define ZOPFLI_MASTER_BLOCK_SIZE 20000000
+#define ZOPFLI_MASTER_BLOCK_SIZE 1000000
 
 /*
 Used to initialize costs for example
@@ -115,27 +119,6 @@ better result of ZopfliLZ77Greedy, but the effect this has on the optimal LZ77
 varies from file to file.
 */
 #define ZOPFLI_LAZY_MATCHING
-
-/*
-Gets the symbol for the given length, cfr. the DEFLATE spec.
-Returns the symbol in the range [257-285] (inclusive)
-*/
-int ZopfliGetLengthSymbol(int l);
-
-/* Gets the amount of extra bits for the given length, cfr. the DEFLATE spec. */
-int ZopfliGetLengthExtraBits(int l);
-
-/* Gets value of the extra bits for the given length, cfr. the DEFLATE spec. */
-int ZopfliGetLengthExtraBitsValue(int l);
-
-/* Gets the symbol for the given dist, cfr. the DEFLATE spec. */
-int ZopfliGetDistSymbol(int dist);
-
-/* Gets the amount of extra bits for the given dist, cfr. the DEFLATE spec. */
-int ZopfliGetDistExtraBits(int dist);
-
-/* Gets value of the extra bits for the given dist, cfr. the DEFLATE spec. */
-int ZopfliGetDistExtraBitsValue(int dist);
 
 /*
 Appends value to dynamically allocated memory, doubling its allocation size

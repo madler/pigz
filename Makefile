@@ -17,7 +17,7 @@ yarn.o: yarn.c yarn.h
 
 try.o: try.c try.h
 
-deflate.o: $(ZOPFLI)deflate.c $(ZOPFLI)deflate.h $(ZOPFLI)blocksplitter.h $(ZOPFLI)lz77.h $(ZOPFLI)squeeze.h $(ZOPFLI)tree.h $(ZOPFLI)zopfli.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)util.h
+deflate.o: $(ZOPFLI)deflate.c $(ZOPFLI)deflate.h $(ZOPFLI)blocksplitter.h $(ZOPFLI)lz77.h $(ZOPFLI)squeeze.h $(ZOPFLI)tree.h $(ZOPFLI)zopfli.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)util.h $(ZOPFLI)symbols.h
 	$(CC) $(CFLAGS) -c $(ZOPFLI)deflate.c
 
 blocksplitter.o: $(ZOPFLI)blocksplitter.c $(ZOPFLI)blocksplitter.h $(ZOPFLI)deflate.h $(ZOPFLI)lz77.h $(ZOPFLI)squeeze.h $(ZOPFLI)tree.h $(ZOPFLI)util.h $(ZOPFLI)zopfli.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h
@@ -26,7 +26,7 @@ blocksplitter.o: $(ZOPFLI)blocksplitter.c $(ZOPFLI)blocksplitter.h $(ZOPFLI)defl
 tree.o: $(ZOPFLI)tree.c $(ZOPFLI)tree.h $(ZOPFLI)katajainen.h $(ZOPFLI)util.h
 	$(CC) $(CFLAGS) -c $(ZOPFLI)tree.c
 
-lz77.o: $(ZOPFLI)lz77.c $(ZOPFLI)lz77.h $(ZOPFLI)util.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)zopfli.h
+lz77.o: $(ZOPFLI)lz77.c $(ZOPFLI)lz77.h $(ZOPFLI)util.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)zopfli.h $(ZOPFLI)symbols.h
 	$(CC) $(CFLAGS) -c $(ZOPFLI)lz77.c
 
 cache.o: $(ZOPFLI)cache.c $(ZOPFLI)cache.h $(ZOPFLI)util.h
@@ -38,7 +38,7 @@ hash.o: $(ZOPFLI)hash.c $(ZOPFLI)hash.h $(ZOPFLI)util.h
 util.o: $(ZOPFLI)util.c $(ZOPFLI)util.h
 	$(CC) $(CFLAGS) -c $(ZOPFLI)util.c
 
-squeeze.o: $(ZOPFLI)squeeze.c $(ZOPFLI)squeeze.h $(ZOPFLI)blocksplitter.h $(ZOPFLI)deflate.h $(ZOPFLI)tree.h $(ZOPFLI)util.h $(ZOPFLI)zopfli.h $(ZOPFLI)lz77.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h
+squeeze.o: $(ZOPFLI)squeeze.c $(ZOPFLI)squeeze.h $(ZOPFLI)blocksplitter.h $(ZOPFLI)deflate.h $(ZOPFLI)tree.h $(ZOPFLI)util.h $(ZOPFLI)zopfli.h $(ZOPFLI)lz77.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)symbols.h
 	$(CC) $(CFLAGS) -c $(ZOPFLI)squeeze.c
 
 katajainen.o: $(ZOPFLI)katajainen.c $(ZOPFLI)katajainen.h

@@ -24,8 +24,8 @@ Author: jyrki.alakuijala@gmail.com (Jyrki Alakuijala)
 #include <stdlib.h>
 
 #include "blocksplitter.h"
-#include "lz77.h"
 #include "squeeze.h"
+#include "symbols.h"
 #include "tree.h"
 
 /*
@@ -294,8 +294,7 @@ Adds all lit/len and dist codes from the lists as huffman symbols. Does not add
 end code 256. expected_data_size is the uncompressed block size, used for
 assert, but you can set it to 0 to not do the assertion.
 */
-static void AddLZ77Data(const unsigned short* litlens,
-                        const unsigned short* dists,
+static void AddLZ77Data(const ZopfliLZ77Store* lz77,
                         size_t lstart, size_t lend,
                         size_t expected_data_size,
                         const unsigned* ll_symbols, const unsigned* ll_lengths,
@@ -306,8 +305,8 @@ static void AddLZ77Data(const unsigned short* litlens,
   size_t i;
 
   for (i = lstart; i < lend; i++) {
-    unsigned dist = dists[i];
-    unsigned litlen = litlens[i];
+    unsigned dist = lz77->dists[i];
+    unsigned litlen = lz77->litlens[i];
     if (dist == 0) {
       assert(litlen < 256);
       assert(ll_lengths[litlen] > 0);
@@ -343,27 +342,81 @@ static void GetFixedTree(unsigned* ll_lengths, unsigned* d_lengths) {
 }
 
 /*
-Calculates size of the part after the header and tree of an LZ77 block, in bits.
+Same as CalculateBlockSymbolSize, but for block size smaller than histogram
+size.
 */
-static size_t CalculateBlockSymbolSize(const unsigned* ll_lengths,
-                                       const unsigned* d_lengths,
-                                       const unsigned short* litlens,
-                                       const unsigned short* dists,
-                                       size_t lstart, size_t lend) {
+static size_t CalculateBlockSymbolSizeSmall(const unsigned* ll_lengths,
+                                            const unsigned* d_lengths,
+                                            const ZopfliLZ77Store* lz77,
+                                            size_t lstart, size_t lend) {
   size_t result = 0;
   size_t i;
   for (i = lstart; i < lend; i++) {
-    if (dists[i] == 0) {
-      result += ll_lengths[litlens[i]];
+    assert(i < lz77->size);
+    assert(lz77->litlens[i] < 259);
+    if (lz77->dists[i] == 0) {
+      result += ll_lengths[lz77->litlens[i]];
     } else {
-      result += ll_lengths[ZopfliGetLengthSymbol(litlens[i])];
-      result += d_lengths[ZopfliGetDistSymbol(dists[i])];
-      result += ZopfliGetLengthExtraBits(litlens[i]);
-      result += ZopfliGetDistExtraBits(dists[i]);
+      int ll_symbol = ZopfliGetLengthSymbol(lz77->litlens[i]);
+      int d_symbol = ZopfliGetDistSymbol(lz77->dists[i]);
+      result += ll_lengths[ll_symbol];
+      result += d_lengths[d_symbol];
+      result += ZopfliGetLengthSymbolExtraBits(ll_symbol);
+      result += ZopfliGetDistSymbolExtraBits(d_symbol);
     }
   }
   result += ll_lengths[256]; /*end symbol*/
   return result;
+}
+
+/*
+Same as CalculateBlockSymbolSize, but with the histogram provided by the caller.
+*/
+static size_t CalculateBlockSymbolSizeGivenCounts(const size_t* ll_counts,
+                                                  const size_t* d_counts,
+                                                  const unsigned* ll_lengths,
+                                                  const unsigned* d_lengths,
+                                                  const ZopfliLZ77Store* lz77,
+                                                  size_t lstart, size_t lend) {
+  size_t result = 0;
+  size_t i;
+  if (lstart + ZOPFLI_NUM_LL * 3 > lend) {
+    return CalculateBlockSymbolSizeSmall(
+        ll_lengths, d_lengths, lz77, lstart, lend);
+  } else {
+    for (i = 0; i < 256; i++) {
+      result += ll_lengths[i] * ll_counts[i];
+    }
+    for (i = 257; i < 286; i++) {
+      result += ll_lengths[i] * ll_counts[i];
+      result += ZopfliGetLengthSymbolExtraBits(i) * ll_counts[i];
+    }
+    for (i = 0; i < 30; i++) {
+      result += d_lengths[i] * d_counts[i];
+      result += ZopfliGetDistSymbolExtraBits(i) * d_counts[i];
+    }
+    result += ll_lengths[256]; /*end symbol*/
+    return result;
+  }
+}
+
+/*
+Calculates size of the part after the header and tree of an LZ77 block, in bits.
+*/
+static size_t CalculateBlockSymbolSize(const unsigned* ll_lengths,
+                                       const unsigned* d_lengths,
+                                       const ZopfliLZ77Store* lz77,
+                                       size_t lstart, size_t lend) {
+  if (lstart + ZOPFLI_NUM_LL * 3 > lend) {
+    return CalculateBlockSymbolSizeSmall(
+        ll_lengths, d_lengths, lz77, lstart, lend);
+  } else {
+    size_t ll_counts[ZOPFLI_NUM_LL];
+    size_t d_counts[ZOPFLI_NUM_D];
+    ZopfliLZ77GetHistogram(lz77, lstart, lend, ll_counts, d_counts);
+    return CalculateBlockSymbolSizeGivenCounts(
+        ll_counts, d_counts, ll_lengths, d_lengths, lz77, lstart, lend);
+  }
 }
 
 static size_t AbsDiff(size_t x, size_t y) {
@@ -374,9 +427,9 @@ static size_t AbsDiff(size_t x, size_t y) {
 }
 
 /*
-Change the population counts in a way that the consequent Hufmann tree
-compression, especially its rle-part will be more likely to compress this data
-more efficiently. length containts the size of the histogram.
+Changes the population counts in a way that the consequent Huffman tree
+compression, especially its rle-part, will be more likely to compress this data
+more efficiently. length contains the size of the histogram.
 */
 void OptimizeHuffmanForRle(int length, size_t* counts) {
   int i, k, stride;
@@ -465,47 +518,148 @@ void OptimizeHuffmanForRle(int length, size_t* counts) {
 }
 
 /*
+Tries out OptimizeHuffmanForRle for this block, if the result is smaller,
+uses it, otherwise keeps the original. Returns size of encoded tree and data in
+bits, not including the 3-bit block header.
+*/
+static double TryOptimizeHuffmanForRle(
+    const ZopfliLZ77Store* lz77, size_t lstart, size_t lend,
+    const size_t* ll_counts, const size_t* d_counts,
+    unsigned* ll_lengths, unsigned* d_lengths) {
+  size_t ll_counts2[ZOPFLI_NUM_LL];
+  size_t d_counts2[ZOPFLI_NUM_D];
+  unsigned ll_lengths2[ZOPFLI_NUM_LL];
+  unsigned d_lengths2[ZOPFLI_NUM_D];
+  double treesize;
+  double datasize;
+  double treesize2;
+  double datasize2;
+
+  treesize = CalculateTreeSize(ll_lengths, d_lengths);
+  datasize = CalculateBlockSymbolSizeGivenCounts(ll_counts, d_counts,
+      ll_lengths, d_lengths, lz77, lstart, lend);
+
+  memcpy(ll_counts2, ll_counts, sizeof(ll_counts2));
+  memcpy(d_counts2, d_counts, sizeof(d_counts2));
+  OptimizeHuffmanForRle(ZOPFLI_NUM_LL, ll_counts2);
+  OptimizeHuffmanForRle(ZOPFLI_NUM_D, d_counts2);
+  ZopfliCalculateBitLengths(ll_counts2, ZOPFLI_NUM_LL, 15, ll_lengths2);
+  ZopfliCalculateBitLengths(d_counts2, ZOPFLI_NUM_D, 15, d_lengths2);
+  PatchDistanceCodesForBuggyDecoders(d_lengths2);
+
+  treesize2 = CalculateTreeSize(ll_lengths2, d_lengths2);
+  datasize2 = CalculateBlockSymbolSizeGivenCounts(ll_counts, d_counts,
+      ll_lengths2, d_lengths2, lz77, lstart, lend);
+
+  if (treesize2 + datasize2 < treesize + datasize) {
+    memcpy(ll_lengths, ll_lengths2, sizeof(ll_lengths2));
+    memcpy(d_lengths, d_lengths2, sizeof(d_lengths2));
+    return treesize2 + datasize2;
+  }
+  return treesize + datasize;
+}
+
+/*
 Calculates the bit lengths for the symbols for dynamic blocks. Chooses bit
 lengths that give the smallest size of tree encoding + encoding of all the
 symbols to have smallest output size. This are not necessarily the ideal Huffman
-bit lengths.
+bit lengths. Returns size of encoded tree and data in bits, not including the
+3-bit block header.
 */
-static void GetDynamicLengths(const unsigned short* litlens,
-                              const unsigned short* dists,
-                              size_t lstart, size_t lend,
-                              unsigned* ll_lengths, unsigned* d_lengths) {
-  size_t ll_counts[288];
-  size_t d_counts[32];
+static double GetDynamicLengths(const ZopfliLZ77Store* lz77,
+                                size_t lstart, size_t lend,
+                                unsigned* ll_lengths, unsigned* d_lengths) {
+  size_t ll_counts[ZOPFLI_NUM_LL];
+  size_t d_counts[ZOPFLI_NUM_D];
 
-  ZopfliLZ77Counts(litlens, dists, lstart, lend, ll_counts, d_counts);
-  OptimizeHuffmanForRle(288, ll_counts);
-  OptimizeHuffmanForRle(32, d_counts);
-  ZopfliCalculateBitLengths(ll_counts, 288, 15, ll_lengths);
-  ZopfliCalculateBitLengths(d_counts, 32, 15, d_lengths);
+  ZopfliLZ77GetHistogram(lz77, lstart, lend, ll_counts, d_counts);
+  ll_counts[256] = 1;  /* End symbol. */
+  ZopfliCalculateBitLengths(ll_counts, ZOPFLI_NUM_LL, 15, ll_lengths);
+  ZopfliCalculateBitLengths(d_counts, ZOPFLI_NUM_D, 15, d_lengths);
   PatchDistanceCodesForBuggyDecoders(d_lengths);
+  return TryOptimizeHuffmanForRle(
+      lz77, lstart, lend, ll_counts, d_counts, ll_lengths, d_lengths);
 }
 
-double ZopfliCalculateBlockSize(const unsigned short* litlens,
-                                const unsigned short* dists,
+double ZopfliCalculateBlockSize(const ZopfliLZ77Store* lz77,
                                 size_t lstart, size_t lend, int btype) {
-  unsigned ll_lengths[288];
-  unsigned d_lengths[32];
+  unsigned ll_lengths[ZOPFLI_NUM_LL];
+  unsigned d_lengths[ZOPFLI_NUM_D];
 
   double result = 3; /* bfinal and btype bits */
 
-  assert(btype == 1 || btype == 2); /* This is not for uncompressed blocks. */
-
-  if(btype == 1) {
+  if (btype == 0) {
+    size_t length = ZopfliLZ77GetByteRange(lz77, lstart, lend);
+    size_t rem = length % 65535;
+    size_t blocks = length / 65535 + (rem ? 1 : 0);
+    /* An uncompressed block must actually be split into multiple blocks if it's
+       larger than 65535 bytes long. Eeach block header is 5 bytes: 3 bits,
+       padding, LEN and NLEN (potential less padding for first one ignored). */
+    return blocks * 5 * 8 + length * 8;
+  } if (btype == 1) {
     GetFixedTree(ll_lengths, d_lengths);
+    result += CalculateBlockSymbolSize(
+        ll_lengths, d_lengths, lz77, lstart, lend);
   } else {
-    GetDynamicLengths(litlens, dists, lstart, lend, ll_lengths, d_lengths);
-    result += CalculateTreeSize(ll_lengths, d_lengths);
+    result += GetDynamicLengths(lz77, lstart, lend, ll_lengths, d_lengths);
   }
 
-  result += CalculateBlockSymbolSize(
-      ll_lengths, d_lengths, litlens, dists, lstart, lend);
-
   return result;
+}
+
+double ZopfliCalculateBlockSizeAutoType(const ZopfliLZ77Store* lz77,
+                                        size_t lstart, size_t lend) {
+  double uncompressedcost = ZopfliCalculateBlockSize(lz77, lstart, lend, 0);
+  /* Don't do the expensive fixed cost calculation for larger blocks that are
+     unlikely to use it. */
+  double fixedcost = (lz77->size > 1000) ?
+      uncompressedcost : ZopfliCalculateBlockSize(lz77, lstart, lend, 1);
+  double dyncost = ZopfliCalculateBlockSize(lz77, lstart, lend, 2);
+  return (uncompressedcost < fixedcost && uncompressedcost < dyncost)
+      ? uncompressedcost
+      : (fixedcost < dyncost ? fixedcost : dyncost);
+}
+
+/* Since an uncompressed block can be max 65535 in size, it actually adds
+multible blocks if needed. */
+static void AddNonCompressedBlock(const ZopfliOptions* options, int final,
+                                  const unsigned char* in, size_t instart,
+                                  size_t inend,
+                                  unsigned char* bp,
+                                  unsigned char** out, size_t* outsize) {
+  size_t pos = instart;
+  (void)options;
+  for (;;) {
+    size_t i;
+    unsigned short blocksize = 65535;
+    unsigned short nlen;
+    int currentfinal;
+
+    if (pos + blocksize > inend) blocksize = inend - pos;
+    currentfinal = pos + blocksize >= inend;
+
+    nlen = ~blocksize;
+
+    AddBit(final && currentfinal, bp, out, outsize);
+    /* BTYPE 00 */
+    AddBit(0, bp, out, outsize);
+    AddBit(0, bp, out, outsize);
+
+    /* Any bits of input up to the next byte boundary are ignored. */
+    *bp = 0;
+
+    ZOPFLI_APPEND_DATA(blocksize % 256, out, outsize);
+    ZOPFLI_APPEND_DATA((blocksize / 256) % 256, out, outsize);
+    ZOPFLI_APPEND_DATA(nlen % 256, out, outsize);
+    ZOPFLI_APPEND_DATA((nlen / 256) % 256, out, outsize);
+
+    for (i = 0; i < blocksize; i++) {
+      ZOPFLI_APPEND_DATA(in[pos + i], out, outsize);
+    }
+
+    if (currentfinal) break;
+    pos += blocksize;
+  }
 }
 
 /*
@@ -526,20 +680,27 @@ out: dynamic output array to append to
 outsize: dynamic output array size
 */
 static void AddLZ77Block(const ZopfliOptions* options, int btype, int final,
-                         const unsigned short* litlens,
-                         const unsigned short* dists,
+                         const ZopfliLZ77Store* lz77,
                          size_t lstart, size_t lend,
                          size_t expected_data_size,
                          unsigned char* bp,
                          unsigned char** out, size_t* outsize) {
-  unsigned ll_lengths[288];
-  unsigned d_lengths[32];
-  unsigned ll_symbols[288];
-  unsigned d_symbols[32];
+  unsigned ll_lengths[ZOPFLI_NUM_LL];
+  unsigned d_lengths[ZOPFLI_NUM_D];
+  unsigned ll_symbols[ZOPFLI_NUM_LL];
+  unsigned d_symbols[ZOPFLI_NUM_D];
   size_t detect_block_size = *outsize;
   size_t compressed_size;
   size_t uncompressed_size = 0;
   size_t i;
+  if (btype == 0) {
+    size_t length = ZopfliLZ77GetByteRange(lz77, lstart, lend);
+    size_t pos = lstart == lend ? 0 : lz77->pos[lstart];
+    size_t end = pos + length;
+    AddNonCompressedBlock(options, final,
+                          lz77->data, pos, end, bp, out, outsize);
+    return;
+  }
 
   AddBit(final, bp, out, outsize);
   AddBit(btype & 1, bp, out, outsize);
@@ -553,7 +714,7 @@ static void AddLZ77Block(const ZopfliOptions* options, int btype, int final,
     unsigned detect_tree_size;
     assert(btype == 2);
 
-    GetDynamicLengths(litlens, dists, lstart, lend, ll_lengths, d_lengths);
+    GetDynamicLengths(lz77, lstart, lend, ll_lengths, d_lengths);
 
     detect_tree_size = *outsize;
     AddDynamicTree(ll_lengths, d_lengths, bp, out, outsize);
@@ -562,18 +723,18 @@ static void AddLZ77Block(const ZopfliOptions* options, int btype, int final,
     }
   }
 
-  ZopfliLengthsToSymbols(ll_lengths, 288, 15, ll_symbols);
-  ZopfliLengthsToSymbols(d_lengths, 32, 15, d_symbols);
+  ZopfliLengthsToSymbols(ll_lengths, ZOPFLI_NUM_LL, 15, ll_symbols);
+  ZopfliLengthsToSymbols(d_lengths, ZOPFLI_NUM_D, 15, d_symbols);
 
   detect_block_size = *outsize;
-  AddLZ77Data(litlens, dists, lstart, lend, expected_data_size,
+  AddLZ77Data(lz77, lstart, lend, expected_data_size,
               ll_symbols, ll_lengths, d_symbols, d_lengths,
               bp, out, outsize);
   /* End symbol. */
   AddHuffmanBits(ll_symbols[256], ll_lengths[256], bp, out, outsize);
 
   for (i = lstart; i < lend; i++) {
-    uncompressed_size += dists[i] == 0 ? 1 : litlens[i];
+    uncompressed_size += lz77->dists[i] == 0 ? 1 : lz77->litlens[i];
   }
   compressed_size = *outsize - detect_block_size;
   if (options->verbose) {
@@ -583,236 +744,59 @@ static void AddLZ77Block(const ZopfliOptions* options, int btype, int final,
   }
 }
 
-static void DeflateDynamicBlock(const ZopfliOptions* options, int final,
-                                const unsigned char* in,
-                                size_t instart, size_t inend,
-                                unsigned char* bp,
-                                unsigned char** out, size_t* outsize) {
-  ZopfliBlockState s;
-  size_t blocksize = inend - instart;
-  ZopfliLZ77Store store;
-  int btype = 2;
-
-  ZopfliInitLZ77Store(&store);
-
-  s.options = options;
-  s.blockstart = instart;
-  s.blockend = inend;
-#ifdef ZOPFLI_LONGEST_MATCH_CACHE
-  s.lmc = (ZopfliLongestMatchCache*)malloc(sizeof(ZopfliLongestMatchCache));
-  ZopfliInitCache(blocksize, s.lmc);
-#endif
-
-  ZopfliLZ77Optimal(&s, in, instart, inend, &store);
-
-  /* For small block, encoding with fixed tree can be smaller. For large block,
-  don't bother doing this expensive test, dynamic tree will be better.*/
-  if (store.size < 1000) {
-    double dyncost, fixedcost;
-    ZopfliLZ77Store fixedstore;
-    ZopfliInitLZ77Store(&fixedstore);
-    ZopfliLZ77OptimalFixed(&s, in, instart, inend, &fixedstore);
-    dyncost = ZopfliCalculateBlockSize(store.litlens, store.dists,
-        0, store.size, 2);
-    fixedcost = ZopfliCalculateBlockSize(fixedstore.litlens, fixedstore.dists,
-        0, fixedstore.size, 1);
-    if (fixedcost < dyncost) {
-      btype = 1;
-      ZopfliCleanLZ77Store(&store);
-      store = fixedstore;
-    } else {
-      ZopfliCleanLZ77Store(&fixedstore);
-    }
-  }
-
-  AddLZ77Block(s.options, btype, final,
-               store.litlens, store.dists, 0, store.size,
-               blocksize, bp, out, outsize);
-
-#ifdef ZOPFLI_LONGEST_MATCH_CACHE
-  ZopfliCleanCache(s.lmc);
-  free(s.lmc);
-#endif
-  ZopfliCleanLZ77Store(&store);
-}
-
-static void DeflateFixedBlock(const ZopfliOptions* options, int final,
-                              const unsigned char* in,
-                              size_t instart, size_t inend,
-                              unsigned char* bp,
-                              unsigned char** out, size_t* outsize) {
-  ZopfliBlockState s;
-  size_t blocksize = inend - instart;
-  ZopfliLZ77Store store;
-
-  ZopfliInitLZ77Store(&store);
-
-  s.options = options;
-  s.blockstart = instart;
-  s.blockend = inend;
-#ifdef ZOPFLI_LONGEST_MATCH_CACHE
-  s.lmc = (ZopfliLongestMatchCache*)malloc(sizeof(ZopfliLongestMatchCache));
-  ZopfliInitCache(blocksize, s.lmc);
-#endif
-
-  ZopfliLZ77OptimalFixed(&s, in, instart, inend, &store);
-
-  AddLZ77Block(s.options, 1, final, store.litlens, store.dists, 0, store.size,
-               blocksize, bp, out, outsize);
-
-#ifdef ZOPFLI_LONGEST_MATCH_CACHE
-  ZopfliCleanCache(s.lmc);
-  free(s.lmc);
-#endif
-  ZopfliCleanLZ77Store(&store);
-}
-
-static void DeflateNonCompressedBlock(const ZopfliOptions* options, int final,
-                                      const unsigned char* in, size_t instart,
-                                      size_t inend,
-                                      unsigned char* bp,
-                                      unsigned char** out, size_t* outsize) {
-  size_t i;
-  size_t blocksize = inend - instart;
-  unsigned short nlen = ~blocksize;
-
-  (void)options;
-  assert(blocksize < 65536);  /* Non compressed blocks are max this size. */
-
-  AddBit(final, bp, out, outsize);
-  /* BTYPE 00 */
-  AddBit(0, bp, out, outsize);
-  AddBit(0, bp, out, outsize);
-
-  /* Any bits of input up to the next byte boundary are ignored. */
-  *bp = 0;
-
-  ZOPFLI_APPEND_DATA(blocksize % 256, out, outsize);
-  ZOPFLI_APPEND_DATA((blocksize / 256) % 256, out, outsize);
-  ZOPFLI_APPEND_DATA(nlen % 256, out, outsize);
-  ZOPFLI_APPEND_DATA((nlen / 256) % 256, out, outsize);
-
-  for (i = instart; i < inend; i++) {
-    ZOPFLI_APPEND_DATA(in[i], out, outsize);
-  }
-}
-
-static void DeflateBlock(const ZopfliOptions* options,
-                         int btype, int final,
-                         const unsigned char* in, size_t instart, size_t inend,
-                         unsigned char* bp,
-                         unsigned char** out, size_t* outsize) {
-  if (btype == 0) {
-    DeflateNonCompressedBlock(
-        options, final, in, instart, inend, bp, out, outsize);
-  } else if (btype == 1) {
-     DeflateFixedBlock(options, final, in, instart, inend, bp, out, outsize);
-  } else {
-    assert (btype == 2);
-    DeflateDynamicBlock(options, final, in, instart, inend, bp, out, outsize);
-  }
-}
-
-/*
-Does squeeze strategy where first block splitting is done, then each block is
-squeezed.
-Parameters: see description of the ZopfliDeflate function.
-*/
-static void DeflateSplittingFirst(const ZopfliOptions* options,
-                                  int btype, int final,
-                                  const unsigned char* in,
-                                  size_t instart, size_t inend,
-                                  unsigned char* bp,
-                                  unsigned char** out, size_t* outsize) {
-  size_t i;
-  size_t* splitpoints = 0;
-  size_t npoints = 0;
-  if (btype == 0) {
-    ZopfliBlockSplitSimple(in, instart, inend, 65535, &splitpoints, &npoints);
-  } else if (btype == 1) {
-    /* If all blocks are fixed tree, splitting into separate blocks only
-    increases the total size. Leave npoints at 0, this represents 1 block. */
-  } else {
-    ZopfliBlockSplit(options, in, instart, inend,
-                     options->blocksplittingmax, &splitpoints, &npoints);
-  }
-
-  for (i = 0; i <= npoints; i++) {
-    size_t start = i == 0 ? instart : splitpoints[i - 1];
-    size_t end = i == npoints ? inend : splitpoints[i];
-    DeflateBlock(options, btype, i == npoints && final, in, start, end,
-                 bp, out, outsize);
-  }
-
-  free(splitpoints);
-}
-
-/*
-Does squeeze strategy where first the best possible lz77 is done, and then based
-on that data, block splitting is done.
-Parameters: see description of the ZopfliDeflate function.
-*/
-static void DeflateSplittingLast(const ZopfliOptions* options,
-                                 int btype, int final,
-                                 const unsigned char* in,
-                                 size_t instart, size_t inend,
+static void AddLZ77BlockAutoType(const ZopfliOptions* options, int final,
+                                 const ZopfliLZ77Store* lz77,
+                                 size_t lstart, size_t lend,
+                                 size_t expected_data_size,
                                  unsigned char* bp,
                                  unsigned char** out, size_t* outsize) {
-  size_t i;
-  ZopfliBlockState s;
-  ZopfliLZ77Store store;
-  size_t* splitpoints = 0;
-  size_t npoints = 0;
+  double uncompressedcost = ZopfliCalculateBlockSize(lz77, lstart, lend, 0);
+  double fixedcost = ZopfliCalculateBlockSize(lz77, lstart, lend, 1);
+  double dyncost = ZopfliCalculateBlockSize(lz77, lstart, lend, 2);
 
-  if (btype == 0) {
-    /* This function only supports LZ77 compression. DeflateSplittingFirst
-       supports the special case of noncompressed data. Punt it to that one. */
-    DeflateSplittingFirst(options, btype, final,
-                          in, instart, inend,
-                          bp, out, outsize);
+  /* Whether to perform the expensive calculation of creating an optimal block
+  with fixed huffman tree to check if smaller. Only do this for small blocks or
+  blocks which already are pretty good with fixed huffman tree. */
+  int expensivefixed = (lz77->size < 1000) || fixedcost <= dyncost * 1.1;
+
+  ZopfliLZ77Store fixedstore;
+  if (lstart == lend) {
+    /* Smallest empty block is represented by fixed block */
+    AddBits(final, 1, bp, out, outsize);
+    AddBits(1, 2, bp, out, outsize);  /* btype 01 */
+    AddBits(0, 7, bp, out, outsize);  /* end symbol has code 0000000 */
+    return;
   }
-  assert(btype == 1 || btype == 2);
+  ZopfliInitLZ77Store(lz77->data, &fixedstore);
+  if (expensivefixed) {
+    /* Recalculate the LZ77 with ZopfliLZ77OptimalFixed */
+    size_t instart = lz77->pos[lstart];
+    size_t inend = instart + ZopfliLZ77GetByteRange(lz77, lstart, lend);
 
-  ZopfliInitLZ77Store(&store);
+    ZopfliBlockState s;
+    ZopfliInitBlockState(options, instart, inend, 1, &s);
+    ZopfliLZ77OptimalFixed(&s, lz77->data, instart, inend, &fixedstore);
+    fixedcost = ZopfliCalculateBlockSize(&fixedstore, 0, fixedstore.size, 1);
+    ZopfliCleanBlockState(&s);
+  }
 
-  s.options = options;
-  s.blockstart = instart;
-  s.blockend = inend;
-#ifdef ZOPFLI_LONGEST_MATCH_CACHE
-  s.lmc = (ZopfliLongestMatchCache*)malloc(sizeof(ZopfliLongestMatchCache));
-  ZopfliInitCache(inend - instart, s.lmc);
-#endif
-
-  if (btype == 2) {
-    ZopfliLZ77Optimal(&s, in, instart, inend, &store);
+  if (uncompressedcost < fixedcost && uncompressedcost < dyncost) {
+    AddLZ77Block(options, 0, final, lz77, lstart, lend,
+                 expected_data_size, bp, out, outsize);
+  } else if (fixedcost < dyncost) {
+    if (expensivefixed) {
+      AddLZ77Block(options, 1, final, &fixedstore, 0, fixedstore.size,
+                   expected_data_size, bp, out, outsize);
+    } else {
+      AddLZ77Block(options, 1, final, lz77, lstart, lend,
+                   expected_data_size, bp, out, outsize);
+    }
   } else {
-    assert (btype == 1);
-    ZopfliLZ77OptimalFixed(&s, in, instart, inend, &store);
+    AddLZ77Block(options, 2, final, lz77, lstart, lend,
+                 expected_data_size, bp, out, outsize);
   }
 
-  if (btype == 1) {
-    /* If all blocks are fixed tree, splitting into separate blocks only
-    increases the total size. Leave npoints at 0, this represents 1 block. */
-  } else {
-    ZopfliBlockSplitLZ77(options, store.litlens, store.dists, store.size,
-                         options->blocksplittingmax, &splitpoints, &npoints);
-  }
-
-  for (i = 0; i <= npoints; i++) {
-    size_t start = i == 0 ? 0 : splitpoints[i - 1];
-    size_t end = i == npoints ? store.size : splitpoints[i];
-    AddLZ77Block(options, btype, i == npoints && final,
-                 store.litlens, store.dists, start, end, 0,
-                 bp, out, outsize);
-  }
-
-#ifdef ZOPFLI_LONGEST_MATCH_CACHE
-  ZopfliCleanCache(s.lmc);
-  free(s.lmc);
-#endif
-
-  ZopfliCleanLZ77Store(&store);
-  free(splitpoints);
+  ZopfliCleanLZ77Store(&fixedstore);
 }
 
 /*
@@ -828,39 +812,120 @@ void ZopfliDeflatePart(const ZopfliOptions* options, int btype, int final,
                        const unsigned char* in, size_t instart, size_t inend,
                        unsigned char* bp, unsigned char** out,
                        size_t* outsize) {
-  if (options->blocksplitting) {
-    if (options->blocksplittinglast) {
-      DeflateSplittingLast(options, btype, final, in, instart, inend,
-                           bp, out, outsize);
-    } else {
-      DeflateSplittingFirst(options, btype, final, in, instart, inend,
-                            bp, out, outsize);
-    }
-  } else {
-    DeflateBlock(options, btype, final, in, instart, inend, bp, out, outsize);
+  size_t i;
+  /* byte coordinates rather than lz77 index */
+  size_t* splitpoints_uncompressed = 0;
+  size_t npoints = 0;
+  size_t* splitpoints = 0;
+  double totalcost = 0;
+  ZopfliLZ77Store lz77;
+
+  /* If btype=2 is specified, it tries all block types. If a lesser btype is
+  given, then however it forces that one. Neither of the lesser types needs
+  block splitting as they have no dynamic huffman trees. */
+  if (btype == 0) {
+    AddNonCompressedBlock(options, final, in, instart, inend, bp, out, outsize);
+    return;
+  } else if (btype == 1) {
+    ZopfliLZ77Store store;
+    ZopfliBlockState s;
+    ZopfliInitLZ77Store(in, &store);
+    ZopfliInitBlockState(options, instart, inend, 1, &s);
+
+    ZopfliLZ77OptimalFixed(&s, in, instart, inend, &store);
+    AddLZ77Block(options, btype, final, &store, 0, store.size, 0,
+                 bp, out, outsize);
+
+    ZopfliCleanBlockState(&s);
+    ZopfliCleanLZ77Store(&store);
+    return;
   }
+
+
+  if (options->blocksplitting) {
+    ZopfliBlockSplit(options, in, instart, inend,
+                     options->blocksplittingmax,
+                     &splitpoints_uncompressed, &npoints);
+    splitpoints = (size_t*)malloc(sizeof(*splitpoints) * npoints);
+  }
+
+  ZopfliInitLZ77Store(in, &lz77);
+
+  for (i = 0; i <= npoints; i++) {
+    size_t start = i == 0 ? instart : splitpoints_uncompressed[i - 1];
+    size_t end = i == npoints ? inend : splitpoints_uncompressed[i];
+    ZopfliBlockState s;
+    ZopfliLZ77Store store;
+    ZopfliInitLZ77Store(in, &store);
+    ZopfliInitBlockState(options, start, end, 1, &s);
+    ZopfliLZ77Optimal(&s, in, start, end, options->numiterations, &store);
+    totalcost += ZopfliCalculateBlockSizeAutoType(&store, 0, store.size);
+
+    ZopfliAppendLZ77Store(&store, &lz77);
+    if (i < npoints) splitpoints[i] = lz77.size;
+
+    ZopfliCleanBlockState(&s);
+    ZopfliCleanLZ77Store(&store);
+  }
+
+  /* Second block splitting attempt */
+  if (options->blocksplitting && npoints > 1) {
+    size_t* splitpoints2 = 0;
+    size_t npoints2 = 0;
+    double totalcost2 = 0;
+
+    ZopfliBlockSplitLZ77(options, &lz77,
+                         options->blocksplittingmax, &splitpoints2, &npoints2);
+
+    for (i = 0; i <= npoints2; i++) {
+      size_t start = i == 0 ? 0 : splitpoints2[i - 1];
+      size_t end = i == npoints2 ? lz77.size : splitpoints2[i];
+      totalcost2 += ZopfliCalculateBlockSizeAutoType(&lz77, start, end);
+    }
+
+    if (totalcost2 < totalcost) {
+      free(splitpoints);
+      splitpoints = splitpoints2;
+      npoints = npoints2;
+    } else {
+      free(splitpoints2);
+    }
+  }
+
+  for (i = 0; i <= npoints; i++) {
+    size_t start = i == 0 ? 0 : splitpoints[i - 1];
+    size_t end = i == npoints ? lz77.size : splitpoints[i];
+    AddLZ77BlockAutoType(options, i == npoints && final,
+                         &lz77, start, end, 0,
+                         bp, out, outsize);
+  }
+
+  ZopfliCleanLZ77Store(&lz77);
+  free(splitpoints);
+  free(splitpoints_uncompressed);
 }
 
 void ZopfliDeflate(const ZopfliOptions* options, int btype, int final,
                    const unsigned char* in, size_t insize,
                    unsigned char* bp, unsigned char** out, size_t* outsize) {
+ size_t offset = *outsize;
 #if ZOPFLI_MASTER_BLOCK_SIZE == 0
   ZopfliDeflatePart(options, btype, final, in, 0, insize, bp, out, outsize);
 #else
   size_t i = 0;
-  while (i < insize) {
+  do {
     int masterfinal = (i + ZOPFLI_MASTER_BLOCK_SIZE >= insize);
     int final2 = final && masterfinal;
     size_t size = masterfinal ? insize - i : ZOPFLI_MASTER_BLOCK_SIZE;
     ZopfliDeflatePart(options, btype, final2,
                       in, i, i + size, bp, out, outsize);
     i += size;
-  }
+  } while (i < insize);
 #endif
   if (options->verbose) {
     fprintf(stderr,
-            "Original Size: %d, Deflate: %d, Compression: %f%% Removed\n",
-            (int)insize, (int)*outsize,
-            100.0 * (double)(insize - *outsize) / (double)insize);
+            "Original Size: %lu, Deflate: %lu, Compression: %f%% Removed\n",
+            (unsigned long)insize, (unsigned long)(*outsize - offset),
+            100.0 * (double)(insize - (*outsize - offset)) / (double)insize);
   }
 }
