@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
- * Copyright (C) 2008, 2011, 2012, 2015 Mark Adler
- * Version 1.4  19 Jan 2015  Mark Adler
+ * Copyright (C) 2008, 2011, 2012, 2015, 2018 Mark Adler
+ * Version 1.5  8 May 2018  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -19,6 +19,7 @@
                        Fix documentation in yarn.h for yarn_prefix
    1.4    19 Jan 2015  Allow yarn_abort() to avoid error message to stderr
                        Accept and do nothing for NULL argument to free_lock()
+   1.5     8 May 2018  Remove destruct() to avoid use of pthread_cancel()
  */
 
 /* for thread portability */
@@ -366,15 +367,4 @@ int join_all(void)
     /* let go of the threads list and return the number of threads joined */
     release(&(threads_lock));
     return count;
-}
-
-/* cancel and join the thread -- the thread will cancel when it gets to a file
-   operation, a sleep or pause, or a condition wait */
-void destruct(thread *off_course)
-{
-    int ret;
-
-    if ((ret = pthread_cancel(off_course->id)) != 0)
-        fail(ret);
-    join(off_course);
 }

@@ -1,6 +1,6 @@
 /* yarn.h -- generic interface for thread operations
- * Copyright (C) 2008, 2011, 2012, 2015 Mark Adler
- * Version 1.4  19 Jan 2015  Mark Adler
+ * Copyright (C) 2008, 2011, 2012, 2015, 2018 Mark Adler
+ * Version 1.5  8 May 2018  Mark Adler
  */
 
 /*
@@ -63,10 +63,6 @@
         the count of the number of threads joined (join_all() should only be
         called from the main thread, and should only be called after any calls
         of join() have completed)
-   destruct(thread) - terminate the thread in mid-execution and join it
-        (depending on the implementation, the termination may not be immediate,
-        but may wait for the thread to execute certain thread or file i/o
-        operations)
 
    -- Lock functions --
 
@@ -118,7 +114,6 @@ typedef struct thread_s thread;
 thread *launch(void (*)(void *), void *);
 void join(thread *);
 int join_all(void);
-void destruct(thread *);
 
 typedef struct lock_s lock;
 lock *new_lock(long);

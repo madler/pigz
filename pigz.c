@@ -3177,6 +3177,8 @@ local void outb_check(void *dummy) {
 // write and check threads and return for more decompression while that's going
 // on (or just write and check if no threads or if proc == 1).
 local int outb(void *desc, unsigned char *buf, unsigned len) {
+    (void)desc;
+
 #ifndef NOTHREAD
     static thread *wr, *ch;
 
@@ -3205,14 +3207,8 @@ local int outb(void *desc, unsigned char *buf, unsigned len) {
         // if requested with len == 0, clean up -- terminate and join write and
         // check threads, free lock
         if (len == 0 && outb_write_more != NULL) {
-            if (desc != NULL) {
-                destruct(ch);
-                destruct(wr);
-            }
-            else {
-                join(ch);
-                join(wr);
-            }
+            join(ch);
+            join(wr);
             free_lock(outb_check_more);
             free_lock(outb_write_more);
             outb_write_more = NULL;
@@ -3224,8 +3220,6 @@ local int outb(void *desc, unsigned char *buf, unsigned len) {
         return 0;
     }
 #endif
-
-    (void)desc;
 
     // if just one process or no threads, then do it without threads
     if (len) {
@@ -3817,7 +3811,7 @@ local void process(char *path) {
                     punt(err);
                 complain("skipping: %s", err.why);
                 drop(err);
-                outb(&g, NULL, 0);
+                outb(NULL, NULL, 0);
             }
             load_end();
             return;
@@ -3918,7 +3912,7 @@ local void process(char *path) {
                 punt(err);
             complain("skipping: %s", err.why);
             drop(err);
-            outb(g.outf, NULL, 0);
+            outb(NULL, NULL, 0);
             if (g.outd != -1 && g.outd != 1) {
                 close(g.outd);
                 g.outd = -1;
