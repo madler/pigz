@@ -391,6 +391,7 @@
 #ifdef _AIX 
 #	define open(p,o,m) open64(p,o,m)
 #	define lstat(p,s) lstat64(p,s) 
+# define fstat(p,s) fstat64(p,s)
 #	define stat stat64
 #endif
 
