@@ -186,6 +186,7 @@
                        Disallow an empty suffix (e.g. --suffix '')
                        Return an exit code of 1 if any issues are encountered
                        Fix sign error in compression reduction percentage
+   2.4.1 6 Jun 2018    Add AIX 64-bit stat and open calls (large file support)
  */
 
 #define VERSION "pigz 2.4\n"
@@ -385,6 +386,12 @@
 #  define utimes(p,t)  0
 #  define lstat(p,s)   stat(p,s)
 #  define _exit(s)     exit(s)
+#endif
+
+#ifdef _AIX 
+#	define open(p,o,m) open64(p,o,m)
+#	define lstat(p,s) lstat64(p,s) 
+#	define stat stat64
 #endif
 
 #include "zlib.h"       // deflateInit2(), deflateReset(), deflate(),
