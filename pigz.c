@@ -2750,7 +2750,7 @@ local int get_header(int save) {
             return -4;              // not a local header
         SKIP(2);
         flags = GET2();
-        if (flags & 0xfff0)
+        if (flags & 0xf7f0)
             return -4;
         method = GET();             // return low byte of method or 256
         if (GET() != 0 || flags & 1)
