@@ -515,7 +515,8 @@ local struct {
     unsigned char magic1;   // first byte of possible header when decoding
     int recurse;            // true to dive down into directory structure
     char *sufx;             // suffix to use (".gz" or user supplied)
-    char *name;             // name for gzip header
+    char *name;             // name for gzip or zip header
+    char *alias;            // name for zip header when input is stdin
     time_t mtime;           // time stamp from input file for gzip header
     int list;               // true to list files instead of compress
     int first;              // true if we need to print listing header
@@ -1042,13 +1043,13 @@ local length_t put_header(void) {
             4, (val_t)0,            // crc (not here)
             4, (val_t)LOW32,        // compressed length (not here)
             4, (val_t)LOW32,        // uncompressed length (not here)
-            2, (val_t)(g.name == NULL ? 1 : strlen(g.name)), // name length
+            2, (val_t)(strlen(g.name == NULL ? g.alias : g.name)),  // name len
             2, (val_t)29,           // length of extra field (see below)
             0);
 
-        // write file name (use "-" for stdin)
-        len += writen(g.outd, g.name == NULL ? "-" : g.name,
-                      g.name == NULL ? 1 : strlen(g.name));
+        // write file name (use g.alias for stdin)
+        len += writen(g.outd, g.name == NULL ? g.alias : g.name,
+                      strlen(g.name == NULL ? g.alias : g.name));
 
         // write Zip64 and extended timestamp extra field blocks (29 bytes)
         len += put(g.outd,
@@ -1119,7 +1120,7 @@ local void put_trailer(length_t ulen, length_t clen,
             4, (val_t)check,        // crc
             4, (val_t)(zip64 ? LOW32 : clen),   // compressed length
             4, (val_t)(zip64 ? LOW32 : ulen),   // uncompressed length
-            2, (val_t)(g.name == NULL ? 1 : strlen(g.name)), // name length
+            2, (val_t)(strlen(g.name == NULL ? g.alias : g.name)),  // name len
             2, (val_t)(zip64 ? 29 : 9), // extra field size (see below)
             2, (val_t)0,            // no file comment
             2, (val_t)0,            // disk number 0
@@ -1128,9 +1129,9 @@ local void put_trailer(length_t ulen, length_t clen,
             4, (val_t)0,            // offset of local header
             0);
 
-        // write file name (use "-" for stdin)
-        cent += writen(g.outd, g.name == NULL ? "-" : g.name,
-                       g.name == NULL ? 1 : strlen(g.name));
+        // write file name (use g.alias for stdin)
+        cent += writen(g.outd, g.name == NULL ? g.alias : g.name,
+                       strlen(g.name == NULL ? g.alias : g.name));
 
         // write Zip64 extra field block (20 bytes)
         if (zip64)
@@ -3968,6 +3969,7 @@ local char *helptext[] = {
 "  -0 to -9, -11        Compression level (level 11, zopfli, is much slower)",
 #endif
 "  --fast, --best       Compression levels 1 and 9 respectively",
+"  -A, --alias xxx      Use xxx as the name for any --zip entry from stdin",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
 "  -d, --decompress     Decompress the compressed input",
@@ -4084,8 +4086,9 @@ local void defaults(void) {
 
 // Long options conversion to short options.
 local char *longopts[][2] = {
-    {"LZW", "Z"}, {"lzw", "Z"}, {"ascii", "a"}, {"best", "9"}, {"bits", "Z"},
-    {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"}, {"force", "f"},
+    {"LZW", "Z"}, {"lzw", "Z"}, {"alias", "A"}, {"ascii", "a"}, {"best", "9"},
+    {"bits", "Z"}, {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"},
+    {"force", "f"},
 #ifndef NOZOPFLI
     {"first", "F"}, {"iterations", "I"}, {"maxsplits", "J"}, {"oneblock", "O"},
 #endif
@@ -4181,6 +4184,7 @@ local int option(char *arg) {
                 if (g.level == 10 || g.level > 11)
                     throw(EINVAL, "only levels 0..9 and 11 are allowed");
                 break;
+            case 'A':  get = 6; break;
 #ifndef NOZOPFLI
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
             case 'I':  get = 4;  break;
@@ -4239,7 +4243,7 @@ local int option(char *arg) {
             return 1;
     }
 
-    // process option parameter for -b, -p, -S, -I, or -J
+    // process option parameter for -b, -p, -A, -S, -I, or -J
     if (get) {
         size_t n;
 
@@ -4276,6 +4280,8 @@ local int option(char *arg) {
             g.zopts.numiterations = (int)num(arg);  // optimize iterations
         else if (get == 5)
             g.zopts.blocksplittingmax = (int)num(arg);  // max block splits
+        else if (get == 6)
+            g.alias = arg;                      // zip name for stdin
 #endif
         get = 0;
         return 1;
@@ -4309,6 +4315,7 @@ int main(int argc, char **argv) {
 #ifndef NOTHREAD
         g.in_which = -1;
 #endif
+        g.alias = "-";
         g.outf = NULL;
         g.first = 1;
         g.hname = NULL;
