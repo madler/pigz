@@ -4343,6 +4343,9 @@ int main(int argc, char **argv) {
         if (zlib_vernum() < 0x1230)
            throw(EINVAL, "zlib version less than 1.2.3");
 
+        // create CRC table, in case zlib compiled with dynamic tables
+        get_crc_table();
+
         // process user environment variable defaults in GZIP
         opts = getenv("GZIP");
         if (opts != NULL) {
