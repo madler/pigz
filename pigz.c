@@ -352,8 +352,10 @@
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #  include <inttypes.h> // intmax_t, uintmax_t
    typedef uintmax_t length_t;
+   typedef uint32_t crc_t;
 #else
    typedef unsigned long length_t;
+   typedef unsigned long crc_t;
 #endif
 
 #ifdef PIGZ_DEBUG
@@ -529,6 +531,7 @@ local struct {
     int procs;              // maximum number of compression threads (>= 1)
     int setdict;            // true to initialize dictionary in each thread
     size_t block;           // uncompressed input size per thread (>= 32K)
+    crc_t shift;            // pre-calculated CRC-32 shift for length block
 
     // saved gzip/zip header data for decompression, testing, and listing
     time_t stamp;           // time stamp from gzip header
@@ -1257,76 +1260,53 @@ local long zlib_vernum(void) {
 // We copy the combination routines from zlib here, in order to avoid linkage
 // issues with the zlib 1.2.3 builds on Sun, Ubuntu, and others.
 
-local unsigned long gf2_matrix_times(unsigned long *mat, unsigned long vec) {
-    unsigned long sum;
+// CRC-32 polynomial, reflected.
+#define POLY 0xedb88320
 
-    sum = 0;
-    while (vec) {
-        if (vec & 1)
-            sum ^= *mat;
-        vec >>= 1;
-        mat++;
+// Return a(x) multiplied by b(x) modulo p(x), where p(x) is the CRC
+// polynomial, reflected. For speed, this requires that a not be zero.
+local crc_t multmodp(crc_t a, crc_t b) {
+    crc_t m = (crc_t)1 << 31;
+    crc_t p = 0;
+    for (;;) {
+        if (a & m) {
+            p ^= b;
+            if ((a & (m - 1)) == 0)
+                break;
+        }
+        m >>= 1;
+        b = b & 1 ? (b >> 1) ^ POLY : b >> 1;
     }
-    return sum;
+    return p;
 }
 
-local void gf2_matrix_square(unsigned long *square, unsigned long *mat) {
-    int n;
+// Table of x^2^n modulo p(x).
+local const crc_t x2n_table[] = {
+    0x40000000, 0x20000000, 0x08000000, 0x00800000, 0x00008000,
+    0xedb88320, 0xb1e6b092, 0xa06a2517, 0xed627dae, 0x88d14467,
+    0xd7bbfe6a, 0xec447f11, 0x8e7ea170, 0x6427800e, 0x4d47bae0,
+    0x09fe548f, 0x83852d0f, 0x30362f1a, 0x7b5a9cc3, 0x31fec169,
+    0x9fec022a, 0x6c8dedc4, 0x15d6874d, 0x5fde7a4e, 0xbad90e37,
+    0x2e4e5eef, 0x4eaba214, 0xa8a472c0, 0x429a969e, 0x148d302a,
+    0xc40ba6d0, 0xc4e22c3c};
 
-    for (n = 0; n < 32; n++)
-        square[n] = gf2_matrix_times(mat, mat[n]);
+// Return x^(n*2^k) modulo p(x).
+local crc_t x2nmodp(size_t n, unsigned k) {
+    crc_t p = (crc_t)1 << 31;       // x^0 == 1
+    while (n) {
+        if (n & 1)
+            p = multmodp(x2n_table[k & 31], p);
+        n >>= 1;
+        k++;
+    }
+    return p;
 }
 
+// This uses the pre-computed g.shift value most of the time. Only the last
+// combination requires a new x2nmodp() calculation.
 local unsigned long crc32_comb(unsigned long crc1, unsigned long crc2,
                                size_t len2) {
-    int n;
-    unsigned long row;
-    unsigned long even[32];     // even-power-of-two zeros operator
-    unsigned long odd[32];      // odd-power-of-two zeros operator
-
-    // degenerate case
-    if (len2 == 0)
-        return crc1;
-
-    // put operator for one zero bit in odd
-    odd[0] = 0xedb88320UL;          // CRC-32 polynomial
-    row = 1;
-    for (n = 1; n < 32; n++) {
-        odd[n] = row;
-        row <<= 1;
-    }
-
-    // put operator for two zero bits in even
-    gf2_matrix_square(even, odd);
-
-    // put operator for four zero bits in odd
-    gf2_matrix_square(odd, even);
-
-    // apply len2 zeros to crc1 (first square will put the operator for one
-    // zero byte, eight zero bits, in even)
-    do {
-        // apply zeros operator for this bit of len2
-        gf2_matrix_square(even, odd);
-        if (len2 & 1)
-            crc1 = gf2_matrix_times(even, crc1);
-        len2 >>= 1;
-
-        // if no more bits set, then done
-        if (len2 == 0)
-            break;
-
-        // another iteration of the loop with odd and even swapped
-        gf2_matrix_square(odd, even);
-        if (len2 & 1)
-            crc1 = gf2_matrix_times(odd, crc1);
-        len2 >>= 1;
-
-        // if no more bits set, then done
-    } while (len2 != 0);
-
-    // return combined crc
-    crc1 ^= crc2;
-    return crc1;
+    return multmodp(len2 == g.block ? g.shift : x2nmodp(len2, 3), crc1) ^ crc2;
 }
 
 #define BASE 65521U     // largest prime smaller than 65536
@@ -4067,6 +4047,7 @@ local void defaults(void) {
     g.procs = nprocs(8);
 #endif
     g.block = 131072UL;             // 128K
+    g.shift = x2nmodp(g.block, 3);
     g.rsync = 0;                    // don't do rsync blocking
     g.setdict = 1;                  // initialize dictionary each thread
     g.verbosity = 1;                // normal message level
@@ -4250,6 +4231,7 @@ local int option(char *arg) {
         if (get == 1) {
             n = num(arg);
             g.block = n << 10;                  // chunk size
+            g.shift = x2nmodp(g.block, 3);
             if (g.block < DICT)
                 throw(EINVAL, "block size too small (must be >= 32K)");
             if (n != g.block >> 10 ||
