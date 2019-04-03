@@ -1384,9 +1384,9 @@ local struct space *get_space(struct pool *pool) {
     // if a space is available, pull it from the list and return it
     if (pool->head != NULL) {
         space = pool->head;
-        possess(space->use);
         pool->head = space->next;
         twist(pool->have, BY, -1);      // one less in pool
+        possess(space->use);
         twist(space->use, TO, 1);       // initially one user
         space->len = 0;
         return space;
@@ -1424,7 +1424,11 @@ local void grow_space(struct space *space) {
 // Increment the use count to require one more drop before returning this space
 // to the pool.
 local void use_space(struct space *space) {
+    long use;
+
     possess(space->use);
+    use = peek_lock(space->use);
+    assert(use != 0);
     twist(space->use, BY, +1);
 }
 
@@ -1438,6 +1442,7 @@ local void drop_space(struct space *space) {
     possess(space->use);
     use = peek_lock(space->use);
     assert(use != 0);
+    twist(space->use, BY, -1);
     if (use == 1) {
         pool = space->pool;
         possess(pool->have);
@@ -1445,7 +1450,6 @@ local void drop_space(struct space *space) {
         pool->head = space;
         twist(pool->have, BY, +1);
     }
-    twist(space->use, BY, -1);
 }
 
 // Free the memory and lock resources of a pool. Return number of spaces for
