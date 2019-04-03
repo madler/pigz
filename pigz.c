@@ -4280,7 +4280,7 @@ local int option(char *arg) {
 #ifndef NOTHREAD
 // handle error received from yarn function
 local void cut_yarn(int err) {
-    throw(err, err == ENOMEM ? "not enough memory" : "internal threads error");
+    throw(err, "internal threads error");
 }
 #endif
 
