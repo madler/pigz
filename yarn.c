@@ -84,7 +84,7 @@ local void fail(int err, char const *file, long line, char const *func) {
         default:
             fprintf(stderr, "internal error %d", err);
     }
-    fprintf(stderr, " (%s:%ld:%s).\n", file, line, func);
+    fprintf(stderr, " (%s:%ld:%s)\n", file, line, func);
     if (yarn_abort != NULL)
         yarn_abort(err);
     exit(err);
