@@ -4148,7 +4148,7 @@ local int option(char *arg) {
 
     // if no argument or dash option, check status of get
     if (get && (arg == NULL || *arg == '-')) {
-        bad[1] = "bpSIM"[get - 1];
+        bad[1] = "bpSIJA"[get - 1];
         throw(EINVAL, "missing parameter after %s", bad);
     }
     if (arg == NULL)
