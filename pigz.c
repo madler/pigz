@@ -539,6 +539,7 @@ local struct {
     unsigned long zip_crc;  // local header crc
     length_t zip_clen;      // local header compressed length
     length_t zip_ulen;      // local header uncompressed length
+    int zip64;              // true if has zip64 extended information
 
     // globals for decompression and listing buffered reading
     unsigned char in_buf[BUF];  // input buffer
@@ -2648,6 +2649,7 @@ local int read_extra(unsigned len, int save) {
         len -= size;
         if (id == 0x0001) {
             // Zip64 Extended Information Extra Field
+            g.zip64 = 1;
             if (g.zip_ulen == LOW32 && size >= 8) {
                 g.zip_ulen = GET4();
                 SKIP(4);
@@ -2733,6 +2735,7 @@ local int get_header(int save) {
             return -5;              // central header or archive extra
         if (magic != 0x0403)
             return -4;              // not a local header
+        g.zip64 = 0;
         SKIP(2);
         flags = GET2();
         if (flags & 0xf7f0)
@@ -3216,6 +3219,11 @@ local int outb(void *desc, unsigned char *buf, unsigned len) {
     return 0;
 }
 
+// Zip file data descriptor signature. This signature may or may not precede
+// the CRC and lengths, with either resulting in a valid zip file! There is
+// some odd code below that tries to detect and accommodate both cases.
+#define SIG 0x08074b50
+
 // Inflate for decompression or testing. Decompress from ind to outd unless
 // decode != 1, in which case just test ind, and then also list if list != 0;
 // look for and decode multiple, concatenated gzip and/or zlib streams; read
@@ -3265,36 +3273,56 @@ local void infchk(void) {
         // read and check trailer
         if (g.form > 1) {           // zip local trailer (if any)
             if (g.form == 3) {      // data descriptor follows
-                // read original version of data descriptor
+                // get data descriptor values, assuming no signature
                 g.zip_crc = GET4();
                 g.zip_clen = GET4();
-                g.zip_ulen = GET4();
-                if (g.in_eof)
-                    throw(EDOM, "%s: corrupted entry -- missing trailer",
-                          g.inf);
+                g.zip_ulen = GET4();        // ZIP64 -> high clen, not ulen
 
-                // if crc doesn't match, try info-zip variant with sig
-                if (g.zip_crc != g.out_check) {
-                    if (g.zip_crc != 0x08074b50UL || g.zip_clen != g.out_check)
-                        throw(EDOM, "%s: corrupted entry -- crc32 mismatch",
-                              g.inf);
+                // deduce whether or not a signature precedes the values
+                if (g.zip_crc == SIG &&         // might be the signature
+                    // if the expected CRC is not SIG, then it's a signature
+                    (g.out_check != SIG ||      // assume signature
+                     // now we're in a very rare case where CRC == SIG -- the
+                     // first four bytes could be the signature or the CRC
+                     (g.zip_clen == SIG &&      // if not, then no signature
+                      // now we have the first two words are SIG and the
+                      // expected CRC is SIG, so it could be a signature and
+                      // the CRC, or it could be the CRC and a compressed
+                      // length that is *also* SIG (!) -- so check the low 32
+                      // bits of the expected compressed length for SIG
+                      ((clen & LOW32) != SIG || // assume signature and CRC
+                       // now the expected CRC *and* the expected low 32 bits
+                       // of the compressed length are SIG -- this is so
+                       // incredibly unlikely, clearly someone is messing with
+                       // us, but we continue ... if the next four bytes are
+                       // not SIG, then there is not a signature -- check those
+                       // bytes, currently in g.zip_ulen:
+                       (g.zip_ulen == SIG &&    // if not, then no signature
+                        // we have three SIGs in a row in the descriptor, and
+                        // both the expected CRC and the expected clen are SIG
+                        // -- the first one is a signature if we don't expect
+                        // the third word to be SIG, which is either the low 32
+                        // bits of ulen, or if ZIP64, the high 32 bits of clen:
+                        (g.zip64 ? clen >> 32 : g.out_tot) != SIG
+                        // if that last compare was equal, then the expected
+                        // values for the CRC, the low 32 bits of clen, *and*
+                        // the low 32 bits of ulen are all SIG (!!), or in the
+                        // case of ZIP64, even crazier, the CRC and *both*
+                        // 32-bit halves of clen are all SIG (clen > 500
+                        // petabytes!!!) ... we can no longer discriminate the
+                        // hypotheses, so we will assume no signature
+                        ))))) {
+                    // first four bytes were actually the descriptor -- shift
+                    // the values down and get another four bytes
                     g.zip_crc = g.zip_clen;
                     g.zip_clen = g.zip_ulen;
                     g.zip_ulen = GET4();
                 }
 
-                // handle incredibly rare cases where crc equals signature
-                else if (g.zip_crc == 0x08074b50UL &&
-                         g.zip_clen == g.zip_crc &&
-                         ((clen & LOW32) != g.zip_crc ||
-                          g.zip_ulen == g.zip_crc)) {
-                    g.zip_crc = g.zip_clen;
-                    g.zip_clen = g.zip_ulen;
-                    g.zip_ulen = GET4();
-                }
-
-                // if second length doesn't match, try 64-bit lengths
-                if (g.zip_ulen != (g.out_tot & LOW32)) {
+                // if ZIP64, then ulen is really the high word of clen -- get
+                // the actual ulen and skip its high word as well (we only
+                // compare the low 32 bits of the lengths to verify)
+                if (g.zip64) {
                     g.zip_ulen = GET4();
                     (void)GET4();
                 }
@@ -3302,11 +3330,13 @@ local void infchk(void) {
                     throw(EDOM, "%s: corrupted entry -- missing trailer",
                           g.inf);
             }
+            check = g.zip_crc;
+            if (check != g.out_check)
+                throw(EDOM, "%s: corrupted entry -- crc32 mismatch", g.inf);
             if (g.zip_clen != (clen & LOW32) ||
                 g.zip_ulen != (g.out_tot & LOW32))
                 throw(EDOM, "%s: corrupted entry -- length mismatch",
                       g.inf);
-            check = g.zip_crc;
         }
         else if (g.form == 1) {     // zlib (big-endian) trailer
             check = (unsigned long)(GET()) << 24;
