@@ -514,7 +514,7 @@ local struct {
     int force;              // true to overwrite, compress links, cat
     int sync;               // true to flush output file
     int form;               // gzip = 0, zlib = 1, zip = 2 or 3
-    unsigned char magic1;   // first byte of possible header when decoding
+    int magic1;             // first byte of possible header when decoding
     int recurse;            // true to dive down into directory structure
     char *sufx;             // suffix to use (".gz" or user supplied)
     char *name;             // name for gzip or zip header
@@ -2570,7 +2570,6 @@ local void in_init(void) {
 // Buffered reading macros for decompression and listing.
 #define GET() (g.in_left == 0 && (g.in_eof || load() == 0) ? 0 : \
                (g.in_left--, *g.in_next++))
-#define UNGET(n) (g.in_left += (n), g.in_next -= (n))
 #define GET2() (tmp2 = GET(), tmp2 + ((unsigned)(GET()) << 8))
 #define GET4() (tmp4 = GET2(), tmp4 + ((unsigned long)(GET2()) << 16))
 #define SKIP(dist) \
@@ -2712,14 +2711,14 @@ local int get_header(int save) {
     // see if it's a gzip, zlib, or lzw file
     g.form = -1;
     g.magic1 = GET();
-    if (g.in_eof)
+    if (g.in_eof) {
+        g.magic1 = -1;
         return -1;
+    }
     magic = (unsigned)g.magic1 << 8;
     magic += GET();
-    if (g.in_eof) {
-        UNGET(1);
+    if (g.in_eof)
         return -2;
-    }
     if (magic % 31 == 0 && (magic & 0x8f20) == 0x0800) {
         // it's zlib
         g.form = 1;
@@ -2778,7 +2777,8 @@ local int get_header(int save) {
         return g.in_eof ? -3 : (int)method;
     }
     if (magic != 0x1f8b) {          // not gzip
-        UNGET(2);
+        g.in_left++;                // return the second byte
+        g.in_next--;
         return -2;
     }
 
@@ -3075,6 +3075,12 @@ local void list_info(void) {
 // --- copy input to output (when acting like cat) ---
 
 local void cat(void) {
+    // copy the first header byte read, if any
+    if (g.magic1 != -1) {
+        unsigned char buf[1] = {g.magic1};
+        g.out_tot += writen(g.outd, buf, 1);
+    }
+
     // copy the remainder of the input to the output
     while (g.in_left) {
         g.out_tot += writen(g.outd, g.in_next, g.in_left);
