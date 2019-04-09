@@ -495,8 +495,10 @@
 #define INBUFS(p) (((p)<<1)+3)
 #define OUTPOOL(s) ((s)+((s)>>4)+DICT)
 
-// Input buffer size.
-#define BUF 32768U
+// Input buffer size, and augmentation for re-inserting a central header.
+#define BUF 32768
+#define CEN 42
+#define EXT (BUF + CEN)     // provide enough room to unget a header
 
 // Globals (modified by main thread only when it's the only thread).
 local struct {
@@ -519,6 +521,7 @@ local struct {
     char *sufx;             // suffix to use (".gz" or user supplied)
     char *name;             // name for gzip or zip header
     char *alias;            // name for zip header when input is stdin
+    char *comment;          // comment for gzip or zip header.
     time_t mtime;           // time stamp from input file for gzip header
     int list;               // true to list files instead of compress
     int first;              // true if we need to print listing header
@@ -536,13 +539,14 @@ local struct {
     // saved gzip/zip header data for decompression, testing, and listing
     time_t stamp;           // time stamp from gzip header
     char *hname;            // name from header (allocated)
+    char *hcomm;            // comment from header (allocated)
     unsigned long zip_crc;  // local header crc
     length_t zip_clen;      // local header compressed length
     length_t zip_ulen;      // local header uncompressed length
     int zip64;              // true if has zip64 extended information
 
     // globals for decompression and listing buffered reading
-    unsigned char in_buf[BUF];  // input buffer
+    unsigned char in_buf[EXT];  // input buffer
     unsigned char *in_next; // next unused byte in buffer
     size_t in_left;         // number of unused bytes in buffer
     int in_eof;             // true if reached end of file on input
@@ -553,7 +557,7 @@ local struct {
 
 #ifndef NOTHREAD
     // globals for decompression parallel reading
-    unsigned char in_buf2[BUF]; // second buffer for parallel reads
+    unsigned char in_buf2[EXT]; // second buffer for parallel reads
     size_t in_len;          // data waiting in next buffer
     int in_which;           // -1: start, 0: in_buf2, 1: in_buf
     lock *load_state;       // value = 0 to wait, 1 to read a buffer
@@ -1068,6 +1072,8 @@ local length_t put_header(void) {
             0);
     }
     else if (g.form) {              // zlib
+        if (g.comment != NULL)
+            complain("can't store comment in zlib format -- ignoring");
         unsigned head;
         head = (0x78 << 8) +        // deflate, 32K window
                (g.level >= 9 ? 3 << 6 :
@@ -1084,13 +1090,16 @@ local length_t put_header(void) {
             1, (val_t)31,
             1, (val_t)139,
             1, (val_t)8,            // deflate
-            1, (val_t)(g.name != NULL ? 8 : 0),
+            1, (val_t)((g.name != NULL ? 8 : 0) +
+                       (g.comment != NULL ? 16 : 0)),
             4, (val_t)g.mtime,
             1, (val_t)(g.level >= 9 ? 2 : g.level == 1 ? 4 : 0),
             1, (val_t)3,            // unix
             0);
         if (g.name != NULL)
             len += writen(g.outd, g.name, strlen(g.name) + 1);
+        if (g.comment != NULL)
+            len += writen(g.outd, g.comment, strlen(g.comment) + 1);
     }
     return len;
 }
@@ -1126,7 +1135,7 @@ local void put_trailer(length_t ulen, length_t clen,
             4, (val_t)(zip64 ? LOW32 : ulen),   // uncompressed length
             2, (val_t)(strlen(g.name == NULL ? g.alias : g.name)),  // name len
             2, (val_t)(zip64 ? 29 : 9), // extra field size (see below)
-            2, (val_t)0,            // no file comment
+            2, (val_t)(g.comment == NULL ? 0 : strlen(g.comment)),  // comment
             2, (val_t)0,            // disk number 0
             2, (val_t)0,            // internal file attributes
             4, (val_t)0,            // external file attributes (ignored)
@@ -1153,6 +1162,10 @@ local void put_trailer(length_t ulen, length_t clen,
             1, (val_t)1,            // flag presence of mod time
             4, (val_t)g.mtime,      // mod time
             0);
+
+        // write comment, if requested
+        if (g.comment != NULL)
+            cent += writen(g.outd, g.comment, strlen(g.comment));
 
         // here zip64 is true if the offset of the central directory does not
         // fit in 32 bits, in which case insert the Zip64 end records to
@@ -2531,7 +2544,7 @@ local size_t load(void) {
 }
 
 // Terminate the load() operation. Empty buffer, mark end, close file (if not
-// stdin), and free the name obtained from the header, if any.
+// stdin), and free the name and comment obtained from the header, if present.
 local void load_end(void) {
 #ifndef NOTHREAD
     // if the read thread is running, then end it
@@ -2554,6 +2567,7 @@ local void load_end(void) {
     if (g.ind != 0)
         close(g.ind);
     RELEASE(g.hname);
+    RELEASE(g.hcomm);
 }
 
 // Initialize for reading new input.
@@ -2601,6 +2615,24 @@ local void in_init(void) {
         crc = crc32z(crc, g.in_next, togo); \
         g.in_left -= togo; \
         g.in_next += togo; \
+    } while (0)
+
+// Get a zero-terminated string into allocated memory, with crc update.
+#define GETZC(str) \
+    do { \
+        unsigned char *end; \
+        size_t copy, have, size = 0; \
+        have = 0; \
+        do { \
+            if (g.in_left == 0 && load() == 0) \
+                return -3; \
+            end = memchr(g.in_next, 0, g.in_left); \
+            copy = end == NULL ? g.in_left : (size_t)(end - g.in_next) + 1; \
+            have = vmemcpy(&str, &size, have, g.in_next, copy); \
+            g.in_left -= copy; \
+            g.in_next += copy; \
+        } while (end == NULL); \
+        crc = crc32z(crc, (unsigned char *)str, have); \
     } while (0)
 
 // Pull LSB order or MSB order integers from an unsigned char buffer.
@@ -2706,6 +2738,7 @@ local int get_header(int save) {
     if (save) {
         g.stamp = 0;
         RELEASE(g.hname);
+        RELEASE(g.hcomm);
     }
 
     // see if it's a gzip, zlib, or lzw file
@@ -2803,29 +2836,22 @@ local int get_header(int save) {
         SKIPC(GET2C());
 
     // read file name, if present, into allocated memory
-    if ((flags & 8) && save) {
-        unsigned char *end;
-        size_t copy, have, size = 0;
-        have = 0;
-        do {
-            if (g.in_left == 0 && load() == 0)
-                return -3;
-            end = memchr(g.in_next, 0, g.in_left);
-            copy = end == NULL ? g.in_left : (size_t)(end - g.in_next) + 1;
-            have = vmemcpy(&g.hname, &size, have, g.in_next, copy);
-            g.in_left -= copy;
-            g.in_next += copy;
-        } while (end == NULL);
-        crc = crc32z(crc, (unsigned char *)g.hname, have);
+    if (flags & 8) {
+        if (save)
+            GETZC(g.hname);
+        else
+            while (GETC() != 0)
+                ;
     }
-    else if (flags & 8)
-        while (GETC() != 0)
-            ;
 
-    // skip comment
-    if (flags & 16)
-        while (GETC() != 0)
-            ;
+    // read comment, if present, into allocated memory
+    if (flags & 16) {
+        if (save)
+            GETZC(g.hcomm);
+        else
+            while (GETC() != 0)
+                ;
+    }
 
     // check header crc
     if ((flags & 2) && GET2() != (crc & 0xffff))
@@ -2834,6 +2860,123 @@ local int get_header(int save) {
     // return gzip compression method
     g.form = 0;
     return g.in_eof ? -3 : (int)method;
+}
+
+// Process the remainder of a zip file after the first entry. Return true if
+// the next signature is another local file header. If listing verbosely, then
+// search the remainder of the zip file for the central file header
+// corresponding to the first zip entry, and save the file comment, if any.
+local int more_zip_entries(void) {
+    unsigned long sig;
+    int ret, n;
+    unsigned char *first;
+    unsigned tmp2;              // for macro
+    unsigned long tmp4;         // for macro
+    unsigned char const central[] = {0x50, 0x4b, 1, 2};
+
+    sig = GET4();
+    ret = !g.in_eof && sig == 0x04034b50;   // true if another entry follows
+    if (!g.list || g.verbosity < 2)
+        return ret;
+
+    // if it was a central file header signature, then already four bytes
+    // into a central directory header -- otherwise search for the next one
+    n = sig == 0x02014b50 ? 4 : 0;  // number of bytes into central header
+    for (;;) {
+        // assure that more input is available
+        if (g.in_left == 0 && load() == 0)      // never found it!
+            return ret;
+        if (n == 0) {
+            // look for first byte in central signature
+            first = memchr(g.in_next, central[0], g.in_left);
+            if (first == NULL) {
+                // not found -- go get the next buffer and keep looking
+                g.in_left = 0;
+            }
+            else {
+                // found -- continue search at next byte
+                n++;
+                g.in_left -= first - g.in_next + 1;
+                g.in_next = first + 1;
+            }
+        }
+        else if (n < 4) {
+            // look for the remaining bytes in the central signature
+            if (g.in_next[0] == central[n]) {
+                n++;
+                g.in_next++;
+                g.in_left--;
+            }
+            else
+                n = 0;      // mismatch -- restart search with this byte
+        }
+        else {
+            // Now in a suspected central file header, just past the signature.
+            // Read the rest of the fixed-length portion of the header.
+            unsigned char head[CEN];
+            size_t need = CEN, part = 0, len, i;
+
+            if (need > g.in_left) {     // will only need to do this once
+                part = g.in_left;
+                memcpy(head + CEN - need, g.in_next, part);
+                need -= part;
+                g.in_left = 0;
+                if (load() == 0)                // never found it!
+                    return ret;
+            }
+            memcpy(head + CEN - need, g.in_next, need);
+
+            // Determine to sufficient probability that this is the droid we're
+            // looking for, by checking the CRC and the local header offset.
+            if (PULL4L(head + 12) == g.out_check && PULL4L(head + 38) == 0) {
+                // Update the number of bytes consumed from the current buffer.
+                g.in_next += need;
+                g.in_left -= need;
+
+                // Get the comment length.
+                len = PULL2L(head + 28);
+                if (len == 0)                   // no comment
+                    return ret;
+
+                // Skip the file name and extra field.
+                SKIP(PULL2L(head + 24) + (unsigned long)PULL2L(head + 26));
+
+                // Save the comment field.
+                need = len;
+                g.hcomm = alloc(NULL, len + 1);
+                while (need > g.in_left) {
+                    memcpy(g.hcomm + len - need, g.in_next, g.in_left);
+                    need -= g.in_left;
+                    g.in_left = 0;
+                    if (load() == 0) {          // premature EOF
+                        free(g.hcomm);
+                        g.hcomm = NULL;
+                        return ret;
+                    }
+                }
+                memcpy(g.hcomm + len - need, g.in_next, need);
+                g.in_next += need;
+                g.in_left -= need;
+                for (i = 0; i < len; i++)
+                    if (g.hcomm[i] == 0)
+                        g.hcomm[i] = ' ';
+                g.hcomm[len] = 0;
+                return ret;
+            }
+            else {
+                // Nope, false alarm. Restart the search at the first byte
+                // after what we thought was the central file header signature.
+                if (part) {
+                    // Move buffer data up and insert the part of the header
+                    // data read from the previous buffer.
+                    memmove(g.in_next + part, g.in_next, g.in_left);
+                    memcpy(g.in_next, head, part);
+                    g.in_left += part;
+                }
+                n = 0;
+            }
+        }
+    }
 }
 
 // --- list contents of compressed input (gzip, zlib, or lzw) ---
@@ -2870,7 +3013,7 @@ local size_t compressed_suffix(char *nm) {
 #define NAMEMAX1 48     // name display limit at verbosity 1
 #define NAMEMAX2 16     // name display limit at verbosity 2
 
-// Print gzip or lzw file information.
+// Print gzip, lzw, zlib, or zip file information.
 local void show_info(int method, unsigned long check, length_t len, int cont) {
     size_t max;             // maximum name length for current verbosity
     size_t n;               // name length without suffix
@@ -2949,6 +3092,8 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
                    g.in_tot, len, red, tag);
 #endif
     }
+    if (g.verbosity > 1 && g.hcomm != NULL)
+        puts(g.hcomm);
 }
 
 // List content information about the gzip file at ind (only works if the gzip
@@ -2982,6 +3127,7 @@ local void list_info(void) {
 
     // list zip file
     if (g.form > 1) {
+        more_zip_entries();         // get first entry comment, if any
         g.in_tot = g.zip_clen;
         show_info(method, g.zip_crc, g.zip_ulen, 0);
         return;
@@ -3235,14 +3381,14 @@ local int outb(void *desc, unsigned char *buf, unsigned len) {
 // look for and decode multiple, concatenated gzip and/or zlib streams; read
 // and check the gzip, zlib, or zip trailer.
 local void infchk(void) {
-    int ret, cont, was;
+    int ret, cont, more;
     unsigned long check, len;
     z_stream strm;
     unsigned tmp2;
     unsigned long tmp4;
     length_t clen;
 
-    cont = 0;
+    cont = more = 0;
     do {
         // header already read -- set up for decompression
         g.in_tot = g.in_left;       // track compressed data length
@@ -3343,6 +3489,7 @@ local void infchk(void) {
                 g.zip_ulen != (g.out_tot & LOW32))
                 throw(EDOM, "%s: corrupted entry -- length mismatch",
                       g.inf);
+            more = more_zip_entries();  // see if more entries, get comment
         }
         else if (g.form == 1) {     // zlib (big-endian) trailer
             check = (unsigned long)(GET()) << 24;
@@ -3374,16 +3521,20 @@ local void infchk(void) {
 
         // if a gzip entry follows a gzip entry, decompress it (don't replace
         // saved header information from first entry)
-        was = g.form;
-    } while (was == 0 && (ret = get_header(0)) == 8 && g.form == 0);
+    } while (g.form == 0 && (ret = get_header(0)) == 8);
 
     // gzip -cdf copies junk after gzip stream directly to output
-    if (was == 0 && ret == -2 && g.force && g.pipeout && g.decode != 2 &&
+    if (g.form == 0 && ret == -2 && g.force && g.pipeout && g.decode != 2 &&
         !g.list)
         cat();
-    else if (was > 1 && get_header(0) != -5)
+
+    // check for more entries in zip file
+    else if (more)
         complain("warning: %s: entries after the first were ignored", g.inf);
-    else if ((was == 0 && ret != -1) || (was == 1 && (GET(), !g.in_eof)))
+
+    // check for non-gzip after gzip stream, or anything after zlib stream
+    else if ((g.form == 0 && ret != -1) ||
+             (g.form == 1 && (GET(), !g.in_eof)))
         complain("warning: %s: trailing junk was ignored", g.inf);
 }
 
@@ -3992,6 +4143,7 @@ local char *helptext[] = {
 "  -A, --alias xxx      Use xxx as the name for any --zip entry from stdin",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
+"  -C, --comment ccc    Put comment ccc in the gzip or zip header",
 "  -d, --decompress     Decompress the compressed input",
 "  -f, --force          Force overwrite, compress .gz, links, and to terminal",
 #ifndef NOZOPFLI
@@ -4096,6 +4248,7 @@ local void defaults(void) {
                                     // where 01 is name and 10 is time
     g.pipeout = 0;                  // don't force output to stdout
     g.sufx = ".gz";                 // compressed file suffix
+    g.comment = NULL;               // no comment
     g.decode = 0;                   // compress
     g.list = 0;                     // compress
     g.keep = 0;                     // delete input file once compressed
@@ -4109,7 +4262,7 @@ local void defaults(void) {
 local char *longopts[][2] = {
     {"LZW", "Z"}, {"lzw", "Z"}, {"alias", "A"}, {"ascii", "a"}, {"best", "9"},
     {"bits", "Z"}, {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"},
-    {"force", "f"},
+    {"force", "f"}, {"comment", "C"},
 #ifndef NOZOPFLI
     {"first", "F"}, {"iterations", "I"}, {"maxsplits", "J"}, {"oneblock", "O"},
 #endif
@@ -4154,7 +4307,7 @@ local int option(char *arg) {
 
     // if no argument or dash option, check status of get
     if (get && (arg == NULL || *arg == '-')) {
-        bad[1] = "bpSIJA"[get - 1];
+        bad[1] = "bpSIJAC"[get - 1];
         throw(EINVAL, "missing parameter after %s", bad);
     }
     if (arg == NULL)
@@ -4186,9 +4339,12 @@ local int option(char *arg) {
             // options until we have the parameter
             if (get) {
                 if (get == 3)
-                    throw(EINVAL, "invalid usage: "
-                                  "-s must be followed by space");
-                break;      // allow -pnnn and -bnnn, fall to parameter code
+                    throw(EINVAL,
+                          "invalid usage: -S must be followed by space");
+                if (get == 7)
+                    throw(EINVAL,
+                          "invalid usage: -C must be followed by space");
+                break;      // allow -*nnn to fall to parameter code
             }
 
             // process next single character option or compression level
@@ -4205,7 +4361,8 @@ local int option(char *arg) {
                 if (g.level == 10 || g.level > 11)
                     throw(EINVAL, "only levels 0..9 and 11 are allowed");
                 break;
-            case 'A':  get = 6; break;
+            case 'A':  get = 6;  break;
+            case 'C':  get = 7;  break;
 #ifndef NOZOPFLI
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
             case 'I':  get = 4;  break;
@@ -4305,6 +4462,8 @@ local int option(char *arg) {
         else if (get == 6)
             g.alias = arg;                      // zip name for stdin
 #endif
+        else if (get == 7)
+            g.comment = arg;                    // header comment
         get = 0;
         return 1;
     }
@@ -4341,6 +4500,7 @@ int main(int argc, char **argv) {
         g.outf = NULL;
         g.first = 1;
         g.hname = NULL;
+        g.hcomm = NULL;
 
         // save pointer to program name for error messages
         p = strrchr(argv[0], '/');
