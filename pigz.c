@@ -1026,7 +1026,7 @@ local unsigned put(int out, ...) {
 
     // write wrap[] to out and return the number of bytes written
     writen(out, wrap, count);
-    free(wrap);
+    FREE(wrap);
     return count;
 }
 
@@ -2949,8 +2949,7 @@ local int more_zip_entries(void) {
                     need -= g.in_left;
                     g.in_left = 0;
                     if (load() == 0) {          // premature EOF
-                        free(g.hcomm);
-                        g.hcomm = NULL;
+                        RELEASE(g.hcomm);
                         return ret;
                     }
                 }
