@@ -63,19 +63,19 @@ pigzt: pigzt.o yarnt.o try.o $(ZOP)
 	$(CC) $(LDFLAGS) -o pigzt pigzt.o yarnt.o try.o $(ZOP) $(LIBS)
 
 pigzt.o: pigz.c yarn.h try.h
-	$(CC) $(CFLAGS) -DDEBUG -g -c -o pigzt.o pigz.c
+	$(CC) $(CFLAGS) -DPIGZ_DEBUG -g -c -o pigzt.o pigz.c
 
 yarnt.o: yarn.c yarn.h
-	$(CC) $(CFLAGS) -DDEBUG -g -c -o yarnt.o yarn.c
+	$(CC) $(CFLAGS) -DPIGZ_DEBUG -g -c -o yarnt.o yarn.c
 
 pigzn: pigzn.o tryn.o $(ZOP)
 	$(CC) $(LDFLAGS) -o pigzn pigzn.o tryn.o $(ZOP) $(LIBS)
 
 pigzn.o: pigz.c try.h
-	$(CC) $(CFLAGS) -DDEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
+	$(CC) $(CFLAGS) -DPIGZ_DEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
 
 tryn.o: try.c try.h
-	$(CC) $(CFLAGS) -DDEBUG -DNOTHREAD -g -c -o tryn.o try.c
+	$(CC) $(CFLAGS) -DPIGZ_DEBUG -DNOTHREAD -g -c -o tryn.o try.c
 
 test: pigz
 	./pigz -kf pigz.c ; ./pigz -t pigz.c.gz
