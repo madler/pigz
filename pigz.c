@@ -585,13 +585,18 @@ local int complain(char *fmt, ...) {
 
 // Memory tracking.
 
+#define MAXMEM 131072   // maximum number of tracked pointers
+
 local struct mem_track_s {
     size_t num;         // current number of allocations
     size_t size;        // total size of current allocations
+    size_t tot;         // maximum number of allocations
     size_t max;         // maximum size of allocations
 #ifndef NOTHREAD
     lock *lock;         // lock for access across threads
 #endif
+    size_t have;        // number in array (possibly != num)
+    void *mem[MAXMEM];  // sorted array of allocated pointers
 } mem_track;
 
 #ifndef NOTHREAD
@@ -602,50 +607,80 @@ local struct mem_track_s {
 #  define mem_track_drop(m)
 #endif
 
-local void *malloc_track(struct mem_track_s *mem, size_t size) {
-    void *ptr;
-
-    ptr = malloc(size);
-    if (ptr != NULL) {
-        size = MALLOC_SIZE(ptr);
-        mem_track_grab(mem);
-        mem->num++;
-        mem->size += size;
-        if (mem->size > mem->max)
-            mem->max = mem->size;
-        mem_track_drop(mem);
+// Return the leftmost insert location of ptr in the sorted list mem->mem[],
+// which currently has mem->have elements. If ptr is already in the list, the
+// returned value will point to its first occurrence. The return location will
+// be one after the last element if ptr is greater than all of the elements.
+local size_t search_track(struct mem_track_s *mem, void *ptr) {
+    ptrdiff_t left = 0;
+    ptrdiff_t right = mem->have - 1;
+    while (left <= right) {
+        ptrdiff_t mid = (left + right) >> 1;
+        if (mem->mem[mid] < ptr)
+            left = mid + 1;
+        else
+            right = mid - 1;
     }
+    return left;
+}
+
+// Insert ptr in the sorted list mem->mem[] and update the memory allocation
+// statistics.
+local void insert_track(struct mem_track_s *mem, void *ptr) {
+    mem_track_grab(mem);
+    assert(mem->have < MAXMEM && "increase MAXMEM in source and try again");
+    size_t i = search_track(mem, ptr);
+    if (i < mem->have && mem->mem[i] == ptr)
+        complain("mem_track: duplicate pointer %p\n", ptr);
+    memmove(&mem->mem[i + 1], &mem->mem[i],
+            (mem->have - i) * sizeof(void *));
+    mem->mem[i] = ptr;
+    mem->have++;
+    mem->num++;
+    mem->size += MALLOC_SIZE(ptr);
+    if (mem->num > mem->tot)
+        mem->tot = mem->num;
+    if (mem->size > mem->max)
+        mem->max = mem->size;
+    mem_track_drop(mem);
+}
+
+// Find and delete ptr from the sorted list mem->mem[] and update the memory
+// allocation statistics.
+local void delete_track(struct mem_track_s *mem, void *ptr) {
+    mem_track_grab(mem);
+    size_t i = search_track(mem, ptr);
+    if (i < mem->num && mem->mem[i] == ptr) {
+        memmove(&mem->mem[i], &mem->mem[i + 1],
+                (mem->have - (i + 1)) * sizeof(void *));
+        mem->have--;
+    }
+    else
+        complain("mem_track: missing pointer %p\n", ptr);
+    mem->num--;
+    mem->size -= MALLOC_SIZE(ptr);
+    mem_track_drop(mem);
+}
+
+local void *malloc_track(struct mem_track_s *mem, size_t size) {
+    void *ptr = malloc(size);
+    if (ptr != NULL)
+        insert_track(mem, ptr);
     return ptr;
 }
 
 local void *realloc_track(struct mem_track_s *mem, void *ptr, size_t size) {
-    size_t was;
-
     if (ptr == NULL)
         return malloc_track(mem, size);
-    was = MALLOC_SIZE(ptr);
-    ptr = realloc(ptr, size);
-    if (ptr != NULL) {
-        size = MALLOC_SIZE(ptr);
-        mem_track_grab(mem);
-        mem->size -= was;
-        mem->size += size;
-        if (mem->size > mem->max)
-            mem->max = mem->size;
-        mem_track_drop(mem);
-    }
-    return ptr;
+    delete_track(mem, ptr);
+    void *got = realloc(ptr, size);
+    insert_track(mem, got == NULL ? ptr : got);
+    return got;
 }
 
 local void free_track(struct mem_track_s *mem, void *ptr) {
-    size_t size;
-
     if (ptr != NULL) {
-        size = MALLOC_SIZE(ptr);
-        mem_track_grab(mem);
-        mem->num--;
-        mem->size -= size;
-        mem_track_drop(mem);
+        delete_track(mem, ptr);
         free(ptr);
     }
 }
@@ -717,7 +752,9 @@ local void log_init(void) {
     if (log_tail == NULL) {
         mem_track.num = 0;
         mem_track.size = 0;
+        mem_track.num = 0;
         mem_track.max = 0;
+        mem_track.have = 0;
 #ifndef NOTHREAD
         mem_track.lock = new_lock(0);
         yarn_mem(yarn_malloc, yarn_free);
@@ -827,8 +864,8 @@ local void log_dump(void) {
         complain("memory leak: %lu allocs of %lu bytes total",
                  mem_track.num, mem_track.size);
     if (mem_track.max)
-        fprintf(stderr, "%lu bytes of memory used\n",
-                (unsigned long)mem_track.max);
+        fprintf(stderr, "%lu bytes of memory used in %lu allocs\n",
+                mem_track.max, mem_track.tot);
 }
 
 // Debugging macro.
