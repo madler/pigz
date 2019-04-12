@@ -2780,7 +2780,6 @@ local int get_header(int save) {
     }
 
     // see if it's a gzip, zlib, or lzw file
-    g.form = -1;
     g.magic1 = GET();
     if (g.in_eof) {
         g.magic1 = -1;
@@ -2795,8 +2794,10 @@ local int get_header(int save) {
         g.form = 1;
         return 8;
     }
-    if (magic == 0x1f9d)            // it's lzw
+    if (magic == 0x1f9d) {          // it's lzw
+        g.form = -1;
         return 257;
+    }
     if (magic == 0x504b) {          // it's zip
         magic = GET2();             // the rest of the signature
         if (g.in_eof)
