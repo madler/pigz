@@ -1962,6 +1962,7 @@ local void write_thread(void *dummy) {
             wait_for(job->calc, TO_BE, 1);
             release(job->calc);
             check = COMB(check, job->check, len);
+            Trace(("-- combined #%ld%s", seq, more ? "" : " (last)"));
 
             // free the job
             free_lock(job->calc);
