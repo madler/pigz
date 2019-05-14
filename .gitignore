@@ -4,3 +4,11 @@
 /pigzj
 /pigzt
 /pigzn
+Makefile.in
+Makefile
+aclocal.m4
+config*
+lib/.deps/
+lib/.dirstamp
+build-aux
+
