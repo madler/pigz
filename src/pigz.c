@@ -4407,7 +4407,7 @@ local int option(char *arg) {
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
-				fputs("\n", stderr);
+                fputs("\n", stderr);
                 fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
@@ -4423,7 +4423,7 @@ local int option(char *arg) {
                 // -T defined below as an alternative for -m
             case 'V':
                 fputs(VERSION, stderr);
-				fputs("\n", stderr);
+                fputs("\n", stderr);
                 if (g.verbosity > 1)
                     fprintf(stderr, "zlib %s\n", zlibVersion());
                 exit(0);
