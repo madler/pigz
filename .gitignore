@@ -1,3 +1,4 @@
+/build-aux
 *.o
 /pigz
 /unpigz
@@ -10,5 +11,13 @@ aclocal.m4
 config*
 lib/.deps/
 lib/.dirstamp
+lib/zopfli/.deps/
+lib/zopfli/.dirstamp
+src/.deps/
+src/.dirstamp
+lib/time.h
 build-aux
+autom4te.cache/
+m4/
+lib/libpigz.a
 
