@@ -1,0 +1,3 @@
+version 2.5 (alpha):
+
+Switches build system from plain Make to autotools
