@@ -1,9 +1,21 @@
-dnl AC_PREREQ([2.69])
+AC_PREREQ([2.65])
 AC_INIT([pigz], m4_esyscmd_s(git describe))
 AC_CONFIG_SRCDIR(src/pigz.c)
-dnl AC_DEFINE([NOZOPFLI]) dnl for now we can't build it with zopfli
-dnl m4_syscmd([git submodule update --init])
 AC_CONFIG_LIBOBJ_DIR([lib])
+
+AC_ARG_ENABLE([zopfli],
+	[AS_HELP_STRING([--enable-zopfli],
+		[Enable zopfli, a very slow but very effective algorithm (default yes)])],
+	[AS_IF([test "x$enable_zopfli" == "xno"],
+	       AC_DEFINE([NOZOPFLI]))])
+dnl before you ask, I don't know why they would do the x thing. it's in the
+dnl autoconf manual and I don't like to think about the many idiosyncrasies of sh.
+
+AC_ARG_ENABLE([threads],
+	[AS_HELP_STRING([--enable-threads],
+		[Enable speedup by multithreading (default yes)])],
+	[AS_IF([test "x$enable_threads" == "xno"],
+	       AC_DEFINE([NOTHREAD]))])
 
 AC_CONFIG_FILES([Makefile lib/Makefile])
 AC_CONFIG_AUX_DIR([build-aux])

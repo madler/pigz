@@ -1297,9 +1297,9 @@ local long zlib_vernum(void) {
     return left < 2 ? num << (left << 2) : -1;
 }
 
-#ifndef NOTHREAD
 // -- threaded portions of pigz --
-
+// Notable that some of these functions have found use in other parts of pigz,
+// so the #ifndef has been moved downward.
 // -- check value combination routines for parallel calculation --
 
 #define COMB(a,b,c) (g.form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
@@ -1340,7 +1340,7 @@ local const crc_t x2n_table[] = {
     0xc40ba6d0, 0xc4e22c3c};
 
 // Return x^(n*2^k) modulo p(x).
-local crc_t x2nmodp(size_t n, unsigned k) {
+static crc_t x2nmodp(size_t n, unsigned k) {
     crc_t p = (crc_t)1 << 31;       // x^0 == 1
     while (n) {
         if (n & 1)
@@ -1380,6 +1380,7 @@ local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
     return sum1 | (sum2 << 16);
 }
 
+#ifndef NOTHREAD
 // -- pool of spaces for buffer management --
 
 // These routines manage a pool of spaces. Each pool specifies a fixed size

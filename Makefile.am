@@ -1,7 +1,6 @@
 SUBDIRS = lib
 
 bin_PROGRAMS = pigz
-AM_LDFLAGS = -lm -lpthread -lz
 pigz_LDADD = $(LIBOBJS)
 pigz_SOURCES = \
 	       src/pigz.c \
