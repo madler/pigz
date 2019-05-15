@@ -10,7 +10,7 @@ pigz_SOURCES = \
 	       lib/yarn.c \
 	       lib/yarn.h \
 	       lib/zopfli/blocksplitter.c \
-	       lib/zopfli/blockspplitter.h \
+	       lib/zopfli/blocksplitter.h \
 	       lib/zopfli/cache.c \
 	       lib/zopfli/cache.h \
 	       lib/zopfli/deflate.c \
