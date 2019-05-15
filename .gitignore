@@ -20,4 +20,4 @@ build-aux
 autom4te.cache/
 m4/
 lib/libpigz.a
-
+*.tar.gz
