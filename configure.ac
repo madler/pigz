@@ -9,7 +9,6 @@ AC_CONFIG_FILES([Makefile lib/Makefile])
 AC_CONFIG_AUX_DIR([build-aux])
 
 AM_INIT_AUTOMAKE([1.11 foreign subdir-objects -Wall -Werror]) 
-AM_CFLAGS([-Wextra])
 dnl TODO: change to 'foreign'->'gnu' after adding requisite infos.
 AM_SILENT_RULES([yes])
 AC_PROG_CC_C99
