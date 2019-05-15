@@ -1,0 +1,5 @@
+2019-14-05 Maria Neptune <maria.elysse.n@gmail.com>
+
+* Move from plain Make to autotools-based build system, additionally moving
+the source files around so that they work better within this system.
+Note that the tests executed by the old make system have not yet been ported.

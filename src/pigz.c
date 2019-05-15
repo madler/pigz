@@ -188,8 +188,6 @@
                        Fix sign error in compression reduction percentage
  */
 
-#define VERSION "pigz 2.4.1x\n"
-
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
     - make build portable (currently good for Unixish)
@@ -400,18 +398,18 @@
 #endif
 
 #ifndef NOTHREAD
-#  include "yarn.h"     // thread, launch(), join(), join_all(), lock,
+#  include "lib/yarn.h"     // thread, launch(), join(), join_all(), lock,
                         // new_lock(), possess(), twist(), wait_for(),
                         // release(), peek_lock(), free_lock(), yarn_name
 #endif
 
 #ifndef NOZOPFLI
-#  include "zopfli/src/zopfli/deflate.h"    // ZopfliDeflatePart(),
+#  include "lib/zopfli/deflate.h"    // ZopfliDeflatePart(),
                                             // ZopfliInitOptions(),
                                             // ZopfliOptions
 #endif
 
-#include "try.h"        // try, catch, always, throw, drop, punt, ball_t
+#include "lib/try.h"        // try, catch, always, throw, drop, punt, ball_t
 
 // For local functions and globals.
 #define local static
@@ -1299,9 +1297,9 @@ local long zlib_vernum(void) {
     return left < 2 ? num << (left << 2) : -1;
 }
 
-#ifndef NOTHREAD
 // -- threaded portions of pigz --
-
+// Notable that some of these functions have found use in other parts of pigz,
+// so the #ifndef has been moved downward.
 // -- check value combination routines for parallel calculation --
 
 #define COMB(a,b,c) (g.form == 1 ? adler32_comb(a,b,c) : crc32_comb(a,b,c))
@@ -1342,7 +1340,7 @@ local const crc_t x2n_table[] = {
     0xc40ba6d0, 0xc4e22c3c};
 
 // Return x^(n*2^k) modulo p(x).
-local crc_t x2nmodp(size_t n, unsigned k) {
+static crc_t x2nmodp(size_t n, unsigned k) {
     crc_t p = (crc_t)1 << 31;       // x^0 == 1
     while (n) {
         if (n & 1)
@@ -1382,6 +1380,7 @@ local unsigned long adler32_comb(unsigned long adler1, unsigned long adler2,
     return sum1 | (sum2 << 16);
 }
 
+#ifndef NOTHREAD
 // -- pool of spaces for buffer management --
 
 // These routines manage a pool of spaces. Each pool specifies a fixed size
@@ -4409,6 +4408,7 @@ local int option(char *arg) {
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 fputs(VERSION, stderr);
+                fputs("\n", stderr);
                 fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
                 fputs("Subject to the terms of the zlib license.\n",
                       stderr);
@@ -4424,6 +4424,7 @@ local int option(char *arg) {
                 // -T defined below as an alternative for -m
             case 'V':
                 fputs(VERSION, stderr);
+                fputs("\n", stderr);
                 if (g.verbosity > 1)
                     fprintf(stderr, "zlib %s\n", zlibVersion());
                 exit(0);

@@ -1,0 +1,10 @@
+/Makefile.am
+/dummy.c
+/arg-nonnull.h
+/c++defs.h
+/pthread.c
+/pthread.in.h
+/sched.in.h
+/stddef.in.h
+/time.in.h
+/warn-on-use.h
