@@ -320,6 +320,7 @@
  */
 
 // Use large file functions if available.
+#include <config.h>
 #define _FILE_OFFSET_BITS 64
 
 // Included headers and what is expected from each.
