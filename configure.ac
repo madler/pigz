@@ -8,6 +8,8 @@ AH_TEMPLATE([NOTHREAD],
 AH_TEMPLATE([NOZOPFLI],
 	    [Disable support for Google zopfli, a very effective but very
 	     slow compression algorithm.])
+AH_TEMPLATE([PIGZ_DEBUG],
+	    [Advanced debugging info such as memory use and very detailed logging.])
 AC_ARG_ENABLE([zopfli],
 	[AS_HELP_STRING([--disable-zopfli],
 		[Disable zopfli, a very slow but very effective algorithm])],
@@ -18,10 +20,14 @@ dnl autoconf manual and I don't like to think about the many idiosyncrasies of s
 
 AC_ARG_ENABLE([threads],
 	[AS_HELP_STRING([--disable-threads],
-		[Disable speedup by multithreading])],
+		[Disable speedup by multithreading.])],
 	[AS_IF([test "x$enable_threads" == "xno"],
 	       AC_DEFINE([NOTHREAD]))])
-
+AC_ARG_ENABLE([advanced-debug],
+	[AS_HELP_STRING([--enable-advanced-debug],
+		[Enable advanced verbose debugging.])],
+	[AS_IF([test "xenable_advanced_debug" != "xno"],
+	       AC_DEFINE([PIGZ_DEBUG]))])
 AC_CONFIG_FILES([Makefile lib/Makefile])
 
 
