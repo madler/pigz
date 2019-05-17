@@ -12,7 +12,7 @@ AH_TEMPLATE([PIGZ_DEBUG],
 	    [Advanced debugging info such as memory use and very detailed logging.])
 AC_ARG_ENABLE([zopfli],
 	[AS_HELP_STRING([--disable-zopfli],
-		[Disable zopfli, a very slow but very effective algorithm])],
+		[Disable support for zopfli, a very slow but very effective algorithm])],
 	[AS_IF([test "x$enable_zopfli" == "xno"],
 	       AC_DEFINE([NOZOPFLI]))])
 dnl before you ask, I don't know why they would do the x thing. it's in the
@@ -39,6 +39,13 @@ AM_SILENT_RULES([yes])
 AC_PROG_CC_C99
 gl_EARLY
 gl_INIT
+gl_MANYWARN_ALL_GCC([warnings])
+dnl ignored warnings:
+nw=
+gl_MANYWARN_COMPLEMENT([warnings], [$warnings], [$nw])
+for w in $warnings; do
+	gl_WARN_ADD([$w])
+done
 AC_PROG_RANLIB
 LIBS="-lm -lpthread -lz"
 AC_OUTPUT
