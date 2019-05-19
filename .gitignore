@@ -13,6 +13,7 @@ lib/.deps/
 lib/.dirstamp
 lib/zopfli/.deps/
 lib/zopfli/.dirstamp
+lib/stamp-h1
 src/.deps/
 src/.dirstamp
 lib/time.h
@@ -21,3 +22,4 @@ autom4te.cache/
 m4/
 lib/libpigz.a
 *.tar.gz
+tags

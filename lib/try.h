@@ -250,7 +250,7 @@
 
 #ifndef _TRY_H
 #define _TRY_H
-
+#include <config.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>

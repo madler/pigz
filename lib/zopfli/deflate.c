@@ -431,7 +431,7 @@ Changes the population counts in a way that the consequent Huffman tree
 compression, especially its rle-part, will be more likely to compress this data
 more efficiently. length contains the size of the histogram.
 */
-void OptimizeHuffmanForRle(int length, size_t* counts) {
+void OptimizeHuffmanForRle(size_t length, size_t* counts) {
   int i, k, stride;
   size_t symbol, sum, limit;
   int* good_for_rle;

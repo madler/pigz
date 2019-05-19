@@ -23,7 +23,7 @@ pigz_SOURCES = \
 	       lib/zopfli/squeeze.c \
 	       lib/zopfli/squeeze.h \
 	       lib/zopfli/symbols.c \
-	       libzopfli/symbols.h \
+	       lib/zopfli/symbols.h \
 	       lib/zopfli/tree.c \
 	       lib/zopfli/tree.h \
 	       lib/zopfli/util.c \

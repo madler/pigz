@@ -320,6 +320,7 @@
  */
 
 // Use large file functions if available.
+#include <config.h>
 #define _FILE_OFFSET_BITS 64
 
 // Included headers and what is expected from each.
@@ -3064,7 +3065,7 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
     if (cont)
         strncpy(tag, "<...>", max + 1);
     else if (g.hname == NULL) {
-        n = strlen(g.inf) - compressed_suffix(g.inf);
+        n = strnlen(g.inf, g.inz) - compressed_suffix(g.inf);
         strncpy(tag, g.inf, n > max + 1 ? max + 1 : n);
         if (strcmp(g.inf + n, ".tgz") == 0 && n < max + 1)
             strncpy(tag + n, ".tar", max + 1 - n);
@@ -3876,7 +3877,7 @@ local void process(char *path) {
         // set input file name (already set if recursed here)
         if (path != g.inf)
             vstrcpy(&g.inf, &g.inz, 0, path);
-        len = strlen(g.inf);
+        len = strnlen(g.inf, g.inz);
 
         // try to stat input file -- if not there and decoding, look for that
         // name with compressed suffixes
@@ -3900,7 +3901,7 @@ local void process(char *path) {
                 complain("skipping: %s does not exist", g.inf);
                 return;
             }
-            len = strlen(g.inf);
+            len = strnlen(g.inf, g.inz);
         }
 
         // only process regular files or named pipes, but allow symbolic links
