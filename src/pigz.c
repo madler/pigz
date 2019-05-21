@@ -4571,63 +4571,61 @@ process (char *path)
 }
 
 static  char *helptext[] = {
-  "Usage: pigz [options] [files ...]",
-  "  will compress files in place, adding the suffix '.gz'. If no files are",
-#ifdef NOTHREAD
-  "  specified, stdin will be compressed to stdout. pigz does what gzip does.",
-#else
-  "  specified, stdin will be compressed to stdout. pigz does what gzip does,",
-  "  but spreads the work over multiple processors and cores when compressing.",
-#endif
+  "Usage: gzip [OPTION]... [FILE]...",
+  "Compress or uncompress FILEs (by default, compress FILES in-place).",
   "",
-  "Options:",
+  "Mandatory arguments to long options are mandatory for short options too.",
+  "",
 #ifdef NOZOPFLI
   "  -0 to -9             Compression level",
 #else
   "  -0 to -9, -11        Compression level (level 11, zopfli, is much slower)",
 #endif
-  "  --fast, --best       Compression levels 1 and 9 respectively",
+  "  -1, --fast           Compress faster",
+  "  -9, --best           Compress better",
   "  -A, --alias xxx      Use xxx as the name for any --zip entry from stdin",
   "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
-  "  -c, --stdout         Write all processed output to stdout (won't delete)",
+  "  -c, --stdout         Write on standard output, keep original files unchanged",
   "  -C, --comment ccc    Put comment ccc in the gzip or zip header",
-  "  -d, --decompress     Decompress the compressed input",
-  "  -f, --force          Force overwrite, compress .gz, links, and to terminal",
+  "  -d, --decompress     Decompress",
+  "  -f, --force          Force overwrite of output file and compress links",
 #ifndef NOZOPFLI
   "  -F  --first          Do iterations first, before block split for -11",
 #endif
-  "  -h, --help           Display a help screen and quit",
+  "  -h, --help           Give this help",
   "  -i, --independent    Compress blocks independently for damage recovery",
 #ifndef NOZOPFLI
   "  -I, --iterations n   Number of iterations for -11 optimization",
+#endif
+#ifndef NOTHREAD
+  "  -j, --jobs n         Allow up to n compression threads (default is the",
+  "                       number of online processors, or 8 if unknown)",
+#endif
+#ifndef NOZOPFLI
   "  -J, --maxsplits n    Maximum number of split blocks for -11",
 #endif
-  "  -k, --keep           Do not delete original file after processing",
+  "  -k, --keep           Keep (don't delete) input files",
   "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
-  "  -l, --list           List the contents of the compressed input",
-  "  -L, --license        Display the pigz license and quit",
+  "  -l, --list           List compressed file contents",
+  "  -L, --license        Display software license",
   "  -m, --no-time        Do not store or restore mod time",
   "  -M, --time           Store or restore mod time",
-  "  -n, --no-name        Do not store or restore file name or mod time",
-  "  -N, --name           Store or restore file name and mod time",
+  "  -n, --no-name        Do not save or restore the original name and time stamp",
+  "  -N, --name           Save or restore the original name and time stamp",
 #ifndef NOZOPFLI
   "  -O  --oneblock       Do not split into smaller blocks for -11",
 #endif
-#ifndef NOTHREAD
-  "  -p, --processes n    Allow up to n compression threads (default is the",
-  "                       number of online processors, or 8 if unknown)",
-#endif
-  "  -q, --quiet          Print no messages, even on error",
-  "  -r, --recursive      Process the contents of all subdirectories",
-  "  -R, --rsyncable      Input-determined block locations for rsync",
-  "  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
-  "  -t, --test           Test the integrity of the compressed input",
+  "  -q, --quiet          Suppress all warnings",
+  "  -r, --recursive      Operate recursively on directories",
+  "  -R, --rsyncable      Make rsync-friendly archive",
+  "  -S, --suffix=SUF     Use suffix SUF on compressed files",
+  "  -t, --test           Test compressed file integrity",
 #ifdef PIGZ_DEBUG
   "  -v, --verbose        Provide more verbose output (-vv to debug)",
 #else
-  "  -v, --verbose        Provide more verbose output",
+  "  -v, --verbose        Verbose mode",
 #endif
-  "  -V  --version        Show the version of pigz",
+  "  -V  --version        Display version number",
   "  -Y  --synchronous    Force output file write to permanent storage",
   "  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
   "  --                   All arguments after \"--\" are treated as files"
