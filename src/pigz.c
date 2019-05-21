@@ -348,6 +348,7 @@
 #include <dirent.h>             // opendir(), readdir(), closedir(), DIR,
                         // struct dirent
 #include <limits.h>             // UINT_MAX, INT_MAX
+#include <getopt.h>     //getopt_long
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #include <inttypes.h>           // intmax_t, uintmax_t
 typedef uintmax_t length_t;
@@ -4698,23 +4699,6 @@ defaults (void)
   g.form = 0;                   // use gzip format
 }
 
-// Long options conversion to short options.
-static  char *longopts[][2] = {
-  {"LZW", "Z"}, {"lzw", "Z"}, {"alias", "A"}, {"ascii", "a"}, {"best", "9"},
-  {"bits", "Z"}, {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"},
-  {"force", "f"}, {"comment", "C"},
-#ifndef NOZOPFLI
-  {"first", "F"}, {"iterations", "I"}, {"maxsplits", "J"}, {"oneblock", "O"},
-#endif
-  {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
-  {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "m"},
-  {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
-  {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"synchronous", "Y"},
-  {"test", "t"}, {"time", "M"}, {"to-stdout", "c"}, {"uncompress", "d"},
-  {"verbose", "v"}, {"version", "V"}, {"zip", "K"}, {"zlib", "z"}
-};
-
-#define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
 // Either new buffer size, new compression level, or new number of processes.
 // Get rid of old buffers and threads to force the creation of new ones with
@@ -4748,256 +4732,6 @@ num (char *arg)
   return val;
 }
 
-// Process an argument, return true if it is an option (not a filename)
-static  int
-option (char *arg)
-{
-  static int get = 0;           // if not zero, look for option parameter
-  char bad[3] = "-X";           // for error messages (X is replaced)
-
-  // if no argument or dash option, check status of get
-  if (get && (arg == NULL || *arg == '-'))
-    {
-      bad[1] = "bpSIJAC"[get - 1];
-      throw (EINVAL, "missing parameter after %s", bad);
-    }
-  if (arg == NULL)
-    return 1;
-
-  // process long option or short options
-  if (*arg == '-')
-    {
-      // a single dash will be interpreted as stdin
-      if (*++arg == 0)
-        return 0;
-
-      // process long option (fall through with equivalent short option)
-      if (*arg == '-')
-        {
-          int j;
-
-          arg++;
-          for (j = NLOPTS - 1; j >= 0; j--)
-            if (strcmp (arg, longopts[j][0]) == 0)
-              {
-                arg = longopts[j][1];
-                break;
-              }
-          if (j < 0)
-            throw (EINVAL, "invalid option: %s", arg - 2);
-        }
-
-      // process short options (more than one allowed after dash)
-      do
-        {
-          // if looking for a parameter, don't process more single character
-          // options until we have the parameter
-          if (get)
-            {
-              if (get == 3)
-                throw (EINVAL, "invalid usage: -S must be followed by space");
-              if (get == 7)
-                throw (EINVAL, "invalid usage: -C must be followed by space");
-              break;            // allow -*nnn to fall to parameter code
-            }
-
-          // process next single character option or compression level
-          bad[1] = *arg;
-          switch (*arg)
-            {
-            case '0':
-            case '1':
-            case '2':
-            case '3':
-            case '4':
-            case '5':
-            case '6':
-            case '7':
-            case '8':
-            case '9':
-              g.level = *arg - '0';
-              while (arg[1] >= '0' && arg[1] <= '9')
-                {
-                  if (g.level && (INT_MAX - (arg[1] - '0')) / g.level < 10)
-                    throw (EINVAL, "only levels 0..9 and 11 are allowed");
-                  g.level = g.level * 10 + *++arg - '0';
-                }
-              if (g.level == 10 || g.level > 11)
-                throw (EINVAL, "only levels 0..9 and 11 are allowed");
-              break;
-            case 'A':
-              get = 6;
-              break;
-            case 'C':
-              get = 7;
-              break;
-#ifndef NOZOPFLI
-            case 'F':
-              g.zopts.blocksplittinglast = 1;
-              break;
-            case 'I':
-              get = 4;
-              break;
-            case 'J':
-              get = 5;
-              break;
-#endif
-            case 'K':
-              g.form = 2;
-              g.sufx = ".zip";
-              break;
-            case 'L':
-              fputs (VERSION, stderr);
-              fputs ("\n", stderr);
-              fputs ("Copyright (C) 2007-2017 Mark Adler\n", stderr);
-              fputs ("Subject to the terms of the zlib license.\n", stderr);
-              fputs ("No warranty is provided or implied.\n", stderr);
-              exit (0);
-            case 'M':
-              g.headis |= 0xa;
-              break;
-            case 'N':
-              g.headis = 0xf;
-              break;
-#ifndef NOZOPFLI
-            case 'O':
-              g.zopts.blocksplitting = 0;
-              break;
-#endif
-            case 'R':
-              g.rsync = 1;
-              break;
-            case 'S':
-              get = 3;
-              break;
-              // -T defined below as an alternative for -m
-            case 'V':
-              fputs (VERSION, stderr);
-              fputs ("\n", stderr);
-              if (g.verbosity > 1)
-                fprintf (stderr, "zlib %s\n", zlibVersion ());
-              exit (0);
-            case 'Y':
-              g.sync = 1;
-              break;
-            case 'Z':
-              throw (EINVAL, "invalid option: LZW output not supported: %s",
-                     bad);
-            case 'a':
-              throw (EINVAL, "invalid option: no ascii conversion: %s", bad);
-            case 'b':
-              get = 1;
-              break;
-            case 'c':
-              g.pipeout = 1;
-              break;
-            case 'd':
-              if (!g.decode)
-                g.headis >>= 2;
-              g.decode = 1;
-              break;
-            case 'f':
-              g.force = 1;
-              break;
-            case 'h':
-              help ();
-              break;
-            case 'i':
-              g.setdict = 0;
-              break;
-            case 'k':
-              g.keep = 1;
-              break;
-            case 'l':
-              g.list = 1;
-              break;
-            case 'n':
-              g.headis = 0;
-              break;
-            case 'T':
-            case 'm':
-              g.headis &= ~0xa;
-              break;
-            case 'p':
-              get = 2;
-              break;
-            case 'q':
-              g.verbosity = 0;
-              break;
-            case 'r':
-              g.recurse = 1;
-              break;
-            case 't':
-              g.decode = 2;
-              break;
-            case 'v':
-              g.verbosity++;
-              break;
-            case 'z':
-              g.form = 1;
-              g.sufx = ".zz";
-              break;
-            default:
-              throw (EINVAL, "invalid option: %s", bad);
-            }
-        }
-      while (*++arg);
-      if (*arg == 0)
-        return 1;
-    }
-
-  // process option parameter for -b, -p, -A, -S, -I, or -J
-  if (get)
-    {
-      size_t n;
-
-      if (get == 1)
-        {
-          n = num (arg);
-          g.block = n << 10;    // chunk size
-          g.shift = x2nmodp (g.block, 3);
-          if (g.block < DICT)
-            throw (EINVAL, "block size too small (must be >= 32K)");
-          if (n != g.block >> 10 || OUTPOOL (g.block) < g.block || (ssize_t) OUTPOOL (g.block) < 0 || g.block > (1UL << 29))    // limited by append_len()
-            throw (EINVAL, "block size too large: %s", arg);
-        }
-      else if (get == 2)
-        {
-          n = num (arg);
-          g.procs = (int) n;    // # processes
-          if (g.procs < 1)
-            throw (EINVAL, "invalid number of processes: %s", arg);
-          if ((size_t) g.procs != n || INBUFS (g.procs) < 1)
-            throw (EINVAL, "too many processes: %s", arg);
-#ifdef NOTHREAD
-          if (g.procs > 1)
-            throw (EINVAL, "compiled without threads");
-#endif
-        }
-      else if (get == 3)
-        {
-          if (*arg == 0)
-            throw (EINVAL, "suffix cannot be empty");
-          g.sufx = arg;         // gz suffix
-        }
-#ifndef NOZOPFLI
-      else if (get == 4)
-        g.zopts.numiterations = (int) num (arg);        // optimize iterations
-      else if (get == 5)
-        g.zopts.blocksplittingmax = (int) num (arg);    // max block splits
-      else if (get == 6)
-        g.alias = arg;          // zip name for stdin
-#endif
-      else if (get == 7)
-        g.comment = arg;        // header comment
-      get = 0;
-      return 1;
-    }
-
-  // neither an option nor parameter
-  return 0;
-}
-
 #ifndef NOTHREAD
 // handle error received from yarn function
 static  void
@@ -5007,101 +4741,105 @@ cut_yarn (int err)
 }
 #endif
 
-// Process command line arguments.
+/* Process command line arguments. */
 int
 main (int argc, char **argv)
 {
-  int n;                        // general index
-  int nop;                      // index before which "-" means stdin
-  int done;                     // number of named files processed
-  size_t k;                     // program name length
-  char *opts, *p;               // environment default options, marker
-  ball_t err;                   // error information from throw()
+  int n;                        /* general index */
+  int nop;                      /* index before which "-" means stdin */
+  int done;                     /* number of named files processed */
+  int optc;                     /* For Option Handling */
+  size_t j;                     /* ^^^^^^^^^^^^^^^^^^^ */
+  size_t k;                     /* program name length */
+  char *opts, *p;               /* environment default options, marker */
+  ball_t err;                   /* error information from throw() */
 
-  g.ret = 0;
+  g.ret = 0;                    /* return code */
+
+  /* Move these after testing */
+  static char const short_options[] = ":b:cC:dfFhiI:j:J:klLmMnNqrRS:tvVYz0123456789";
+  static struct option const long_options[] =
+    {
+      { "fast",        0, 0, '1' },
+      { "best",        0, 0, '9' },
+      /* {"ascii",    0, 0, 'a}, */
+      { "blocksize",   1, 0, 'b' },
+      { "stdout",      0, 0, 'c' },
+      { "to-stdout",   0, 0, 'c' },
+      { "complevel",   1, 0, 'C' },
+      { "decompress",  0, 0, 'd' },
+      { "uncompress",  0, 0, 'd' },
+      { "force",       0, 0, 'f' },
+      { "first",       0, 0, 'F' },
+      { "help",        0, 0, 'h' },
+      { "independent", 0, 0, 'i' },
+      { "iterations",  1, 0, 'I' },
+      { "jobs",        1, 0, 'j' },
+      { "maxsplits",   1, 0, 'J' },
+      { "keep",        0, 0, 'k' },
+      { "list",        0, 0, 'l' },
+      { "license",     0, 0, 'L' },
+      { "no-time",     0, 0, 'm' },
+      { "time",        0, 0, 'M' },
+      { "no-name",     0, 0, 'n' },
+      { "name",        0, 0, 'N' },
+      { "oneblock",    0, 0, 'O' },
+      { "quiet",       0, 0, 'q' },
+      { "recursive",   0, 0, 'r' },
+      { "rsyncable",   0, 0, 'R' },
+      { "suffix",      1, 0, 'S' },
+      { "test",        0, 0, 't' },
+      { "verbose",     0, 0, 'v' },
+      { "version",     0, 0, 'V' },
+      { "synchronous", 0, 0, 'Y' },
+      { "zlib",        0, 0, 'z' },
+      { NULL, 0, 0, 0 }
+    };
+
+
   try
-  {
-    // initialize globals
-    g.inf = NULL;
-    g.inz = 0;
+    {
+      /* initialize globals */
+      g.inf = NULL;
+      g.inz = 0;
 #ifndef NOTHREAD
-    g.in_which = -1;
+      g.in_which = -1;
 #endif
-    g.alias = "-";
-    g.outf = NULL;
-    g.first = 1;
-    g.hname = NULL;
-    g.hcomm = NULL;
+      g.alias = "-"; /* !!! new in develop pigz version !!! */
+      g.outf = NULL; 
+      g.first = 1;
+      g.hname = NULL;
+      g.hcomm = NULL; /* !!! new in develop pigz version !!! */
 
-    // save pointer to program name for error messages
-    p = strrchr (argv[0], '/');
-    p = p == NULL ? argv[0] : p + 1;
-    g.prog = *p ? p : "pigz";
+      /* save pointer to program name for error messages */
+      p = strrchr (argv[0], '/');
+      p = p == NULL ? argv[0] : p + 1;
+      g.prog = *p ? p : "pigz";
 
-    // prepare for interrupts and logging
-    signal (SIGINT, cut_short);
+      /* prepare for interrupts and logging */
+      signal (SIGINT, cut_short);
 #ifndef NOTHREAD
-    yarn_prefix = g.prog;       // prefix for yarn error messages
-    yarn_abort = cut_yarn;      // call on thread error
+      yarn_prefix = g.prog;       // prefix for yarn error messages
+      yarn_abort = cut_yarn;      // call on thread error
 #endif
 #ifdef PIGZ_DEBUG
-    gettimeofday (&start, NULL);        // starting time for log entries
-    log_init ();                // initialize logging
+      gettimeofday (&start, NULL);        // starting time for log entries
+      log_init ();                // initialize logging
 #endif
 
-    // set all options to defaults
-    defaults ();
+      /* set all options to defaults */
+      defaults ();
 
-    // check zlib version
-    if (zlib_vernum () < 0x1230)
-      throw (EINVAL, "zlib version less than 1.2.3");
+      /* check zlib version */
+      if (zlib_vernum () < 0x1230)
+        throw (EINVAL, "zlib version less than 1.2.3");
 
-    // create CRC table, in case zlib compiled with dynamic tables
-    get_crc_table ();
+      /* create CRC table, in case zlib compiled with dynamic tables */
+      get_crc_table ();  /* !!! new in develop pigz version !!! */
 
-    // process user environment variable defaults in GZIP
-    opts = getenv ("GZIP");
-    if (opts != NULL)
-      {
-        while (*opts)
-          {
-            while (*opts == ' ' || *opts == '\t')
-              opts++;
-            p = opts;
-            while (*p && *p != ' ' && *p != '\t')
-              p++;
-            n = *p;
-            *p = 0;
-            if (!option (opts))
-              throw (EINVAL, "cannot provide files in "
-                     "GZIP environment variable");
-            opts = p + (n ? 1 : 0);
-          }
-        option (NULL);          // check for missing parameter
-      }
-
-    // process user environment variable defaults in PIGZ as well
-    opts = getenv ("PIGZ");
-    if (opts != NULL)
-      {
-        while (*opts)
-          {
-            while (*opts == ' ' || *opts == '\t')
-              opts++;
-            p = opts;
-            while (*p && *p != ' ' && *p != '\t')
-              p++;
-            n = *p;
-            *p = 0;
-            if (!option (opts))
-              throw (EINVAL, "cannot provide files in "
-                     "PIGZ environment variable");
-            opts = p + (n ? 1 : 0);
-          }
-        option (NULL);          // check for missing parameter
-      }
-
-    // decompress if named "unpigz" or "gunzip", to stdout if "*cat"
+    /* TODO: CHANGE TO ungzip rather than unpigz later on*/
+    /* ENSURE WE ACCEPT zcat, pcat, gcat, and gzcat */
+    /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
     if (strcmp (g.prog, "unpigz") == 0 || strcmp (g.prog, "gunzip") == 0)
       {
         if (!g.decode)
@@ -5116,52 +4854,131 @@ main (int argc, char **argv)
         g.pipeout = 1;
       }
 
-    // if no arguments and compressed data to/from terminal, show help
+    /* TODO: ERROR MSG SAYING ENVIRONMENT VARS WERE DISABLED IN THIS VERSION OF GZIP? */
+
+    /* if no arguments and compressed data to/from terminal, show help */
     if (argc < 2 && isatty (g.decode ? 0 : 1))
       help ();
 
-    // process all command-line options first
-    nop = argc;
-    for (n = 1; n < argc; n++)
-      if (strcmp (argv[n], "--") == 0)
-        {
-          nop = n;              // after this, "-" is the name "-"
-          argv[n] = NULL;       // remove option
-          break;                // ignore options after "--"
+    /* process all command-line options first, move to own function later */
+    while ((optc = getopt_long(argc, argv, short_options, long_options, NULL)) != -1)
+      {
+        switch (optc)
+          {
+            /* Z and a are NOT supported by pigz! */
+            /* Going to give compression level 11 its own letter later*/
+            case '0': case '1': case '2': case '3': case '4':
+            case '5': case '6': case '7': case '8': case '9':
+                      if ( (optc - '0') < 0 || (optc - '0') > 9)
+                        throw(EINVAL, "only levels 0..9 are allowed");
+                      g.level = optc - '0';
+                      break;    
+            case 'b': j = num(optarg);
+                      g.block = j << 10;                  /* chunk size */
+                      if (g.block < DICT)
+                        throw(EINVAL, "block size too small (must be >= 32K)");
+                      if (j != g.block >> 10 ||
+                        OUTPOOL(g.block) < g.block ||
+                               (ssize_t)OUTPOOL(g.block) < 0 ||
+                                g.block > (1UL << 29))  /* limited by append_len() */
+                        throw(EINVAL, "block size too large: %s", optarg);
+                      break;
+            case 'c':  g.pipeout = 1;  break;
+            case 'd':  if (!g.decode) 
+                         g.headis >>= 2;  
+                       g.decode = 1;  break;
+            case 'f':  g.force = 1;  break;
+            case 'h':  help ();  break;
+            case 'i':  g.setdict = 0;  break;
+            case 'j':  j = num (optarg); /* Use of num function to be removed later */
+                       g.procs = (int)j;                   /* # processes */
+                       if (g.procs < 1)
+                         throw(EINVAL, "invalid number of processes: %s", optarg);
+                       if ((size_t)g.procs != j || INBUFS(g.procs) < 1)
+                         throw(EINVAL, "too many processes: %s", optarg);
+#ifdef NOTHREAD
+                       if (g.procs > 1)
+                         throw(EINVAL, "compiled without threads");
+#endif
+                       break;
+            case 'k':  g.keep = 1;  break;
+            case 'K':  g.form = 2;  
+                       g.sufx = ".zip";  break;
+            case 'l':  g.list = 1;  break;
+            case 'L':  fputs(VERSION, stderr);
+                       fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
+                       fputs("Subject to the terms of the zlib license.\n", stderr);
+                       fputs("No warranty is provided or implied.\n", stderr);
+                       exit(0); break;
+            case 'm':  g.headis &= ~0xa;  break;
+            case 'M':  g.headis |= 0xa;  break;
+            case 'n':  g.headis = 0;  break;
+            case 'N':  g.headis = 0xf;  break;
+#ifndef NOZOPFLI
+            case 'O':  g.zopts.blocksplitting = 0;  break;
+            case 'F':  g.zopts.blocksplittinglast = 1;  break;
+            case 'I':  g.zopts.numiterations = (int)num(optarg);  break; /* optimize iterations */
+            case 'J':  g.zopts.blocksplittingmax = (int)num(optarg);  break; /* max block splits */
+#endif
+            case 'q':  g.verbosity = 0;  break;
+            case 'r':  g.recurse = 1;  break;
+            case 'R':  g.rsync = 1;  break;
+            case 't':  g.decode = 2;  break;
+            case 'S':  if (*optarg == 0)
+                         throw(EINVAL, "suffix cannot be empty");
+                       g.sufx = optarg; /* gz suffix */
+                       break;
+            case 'v': g.verbosity++;  break;
+            case 'V': fputs(VERSION, stderr);
+                      if (g.verbosity > 1)
+                        fprintf(stderr, "zlib %s\n", zlibVersion());
+                      exit(0);
+                      break;
+            case 'Y':  g.sync = 1;  break; /* Synchronous option, not in pdf should be added to docs */
+            case 'z':  g.form = 1;  
+                       g.sufx = ".zz";  break;
+            case ':': throw(EINVAL, "missing mandatory argument"); break;
+            default:  if(optopt)
+                        throw(EINVAL, "unrecognized option: %c", optopt);
+                      else 
+                        throw(EINVAL, "unrecognized option: %s", argv[(int)optind - 1]); break; 
+          }
+          argv[(int)optind - 1] = NULL;
         }
-      else if (option (argv[n]))        // process argument
-        argv[n] = NULL;         // remove if option
-    option (NULL);              // check for missing parameter
 
-    // process command-line filenames
-    done = 0;
-    for (n = 1; n < argc; n++)
-      if (argv[n] != NULL)
-        {
-          if (done == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
-            complain ("warning: output will be concatenated zip files"
-                      " -- %s will not be able to extract", g.prog);
-          process (n < nop && strcmp (argv[n], "-") == 0 ? NULL : argv[n]);
-          done++;
-        }
+      /* Fixes ignoring after --, and lets allows the file processing code to be used, review this */
+      if (argv[(int)optind - 1] != NULL && strcmp(argv[(int)optind - 1], "--") == 0)
+        argv[(int)optind - 1] = NULL;
 
-    // list stdin or compress stdin to stdout if no file names provided
-    if (done == 0)
-      process (NULL);
-  }
+      /* process command-line filenames */
+      done = 0;
+      for (n = 1; n < argc; n++)
+        if (argv[n] != NULL)
+          {
+            if (done == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
+              complain ("warning: output will be concatenated zip files"
+                        " -- %s will not be able to extract", g.prog);
+            process (n < nop && strcmp (argv[n], "-") == 0 ? NULL : argv[n]);
+            done++;
+          }
+
+      /* list stdin or compress stdin to stdout if no file names provided */
+      if (done == 0)
+        process (NULL);
+    }
   always
-  {
-    // release resources
-    RELEASE (g.inf);
-    g.inz = 0;
-    new_opts ();
-  }
+    {
+      /* release resources */
+      RELEASE (g.inf);
+      g.inz = 0;
+      new_opts ();
+    }
   catch (err)
-  {
-    THREADABORT (err);
-  }
+    {
+      THREADABORT (err);
+    }
 
-  // show log (if any)
+  /* show log (if any) */
   log_dump ();
   return g.ret;
 }
