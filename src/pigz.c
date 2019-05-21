@@ -319,36 +319,43 @@
    buffers to about the same number.
  */
 
-// Use large file functions if available.
+/* Use large file functions if available. */
 #include <config.h>
 #define _FILE_OFFSET_BITS 64
 
-// Included headers and what is expected from each.
-#include <stdio.h>              // fflush(), fprintf(), fputs(), getchar(), putc(),
-                        // puts(), printf(), vasprintf(), stderr, EOF, NULL,
-                        // SEEK_END, size_t, off_t
-#include <stdlib.h>             // exit(), malloc(), free(), realloc(), atol(), atoi(),
-                        // getenv()
-#include <stdarg.h>             // va_start(), va_arg(), va_end(), va_list
-#include <string.h>             // memset(), memchr(), memcpy(), strcmp(), strcpy(),
-                        // strncpy(), strlen(), strcat(), strrchr(),
-                        // strerror()
-#include <errno.h>              // errno, EEXIST
-#include <assert.h>             // assert()
-#include <time.h>               // ctime(), time(), time_t, mktime()
-#include <signal.h>             // signal(), SIGINT
-#include <sys/types.h>          // ssize_t
-#include <sys/stat.h>           // chmod(), stat(), fstat(), lstat(), struct stat,
-                        // S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
-#include <sys/time.h>           // utimes(), gettimeofday(), struct timeval
-#include <unistd.h>             // unlink(), _exit(), read(), write(), close(),
-                        // lseek(), isatty(), chown(), fsync()
-#include <fcntl.h>              // open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
-                        // O_WRONLY, fcntl(), F_FULLFSYNC
-#include <dirent.h>             // opendir(), readdir(), closedir(), DIR,
-                        // struct dirent
-#include <limits.h>             // UINT_MAX, INT_MAX
-#include <getopt.h>     //getopt_long
+/* Included headers and expected functions, vars, types, etc */
+#include <stdio.h>      /* fflush(), fprintf(), fputs(), getchar(), putc(),
+                         * puts(), printf(), vasprintf(), stderr, EOF, NULL,
+                         * SEEK_END, size_t, off_t 
+                         */
+#include <stdlib.h>     /* exit(), malloc(), free(), realloc(), atol(), atoi(),
+                         * getenv() */
+#include <stdarg.h>     /* va_start(), va_arg(), va_end(), va_list */
+#include <string.h>     /* memset(), memchr(), memcpy(), strcmp(), strcpy(),
+                         * strncpy(), strlen(), strcat(), strrchr(),
+                         * strerror() 
+                         */
+#include <errno.h>      /* errno, EEXIST */
+#include <assert.h>     /* assert() */
+#include <time.h>       /* ctime(), time(), time_t, mktime() */
+#include <signal.h>     /* signal(), SIGINT */
+#include <sys/types.h>  /* ssize_t */
+#include <sys/stat.h>   /* chmod(), stat(), fstat(), lstat(), struct stat,
+                         * S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
+                         */
+#include <sys/time.h>   /* utimes(), gettimeofday(), struct timeval  */
+#include <unistd.h>     /* unlink(), _exit(), read(), write(), close(),
+                         * lseek(), isatty(), chown(), fsync()
+                         */
+#include <fcntl.h>      /* open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
+                         * O_WRONLY, fcntl(), F_FULLFSYNC
+                         */
+#include <dirent.h>     /* opendir(), readdir(), closedir(), DIR,
+                         * struct dirent
+                         */
+#include <limits.h>     /* UINT_MAX, INT_MAX  */
+#include <getopt.h>     /* getopt_long  */
+
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #include <inttypes.h>           // intmax_t, uintmax_t
 typedef uintmax_t length_t;
@@ -389,29 +396,32 @@ typedef unsigned long crc_t;
 #define _exit(s)     exit(s)
 #endif
 
-#include "zlib.h"               // deflateInit2(), deflateReset(), deflate(),
-                        // deflateEnd(), deflateSetDictionary(), crc32(),
-                        // adler32(), inflateBackInit(), inflateBack(),
-                        // inflateBackEnd(), Z_DEFAULT_COMPRESSION,
-                        // Z_DEFAULT_STRATEGY, Z_DEFLATED, Z_NO_FLUSH, Z_NULL,
-                        // Z_OK, Z_SYNC_FLUSH, z_stream
+#include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(),
+                         * deflateEnd(), deflateSetDictionary(), crc32(),
+                         * adler32(), inflateBackInit(), inflateBack(),
+                         * inflateBackEnd(), Z_DEFAULT_COMPRESSION,
+                         * Z_DEFAULT_STRATEGY, Z_DEFLATED, Z_NO_FLUSH, Z_NULL,
+                         * Z_OK, Z_SYNC_FLUSH, z_stream
+                         */
 #if !defined(ZLIB_VERNUM) || ZLIB_VERNUM < 0x1230
 #error "Need zlib version 1.2.3 or later"
 #endif
 
 #ifndef NOTHREAD
-#include "lib/yarn.h"           // thread, launch(), join(), join_all(), lock,
-                        // new_lock(), possess(), twist(), wait_for(),
-                        // release(), peek_lock(), free_lock(), yarn_name
+#include "lib/yarn.h"   /* thread, launch(), join(), join_all(), lock,
+                         * new_lock(), possess(), twist(), wait_for(),
+                         * release(), peek_lock(), free_lock(), yarn_name
+                         */
 #endif
 
 #ifndef NOZOPFLI
-#include "lib/zopfli/deflate.h" // ZopfliDeflatePart(),
-                                            // ZopfliInitOptions(),
-                                            // ZopfliOptions
+#include "lib/zopfli/deflate.h"    /* ZopfliDeflatePart(),
+                                    * ZopfliInitOptions(),
+                                    * ZopfliOptions
+                                    */
 #endif
 
-#include "lib/try.h"            // try, catch, always, throw, drop, punt, ball_t
+#include "lib/try.h"            /* try, catch, always, throw, drop, punt, ball_t */
 
 // For local functions and globals.
 // #define local static
@@ -949,7 +959,7 @@ cut_short (int sig)
 // Common code for catch block of top routine in the thread.
 #define THREADABORT(ball) \
     do { \
-        complain("abort: %s", (ball).why); \
+        complain("%s", (ball).why); \
         drop(ball); \
         cut_short(-(ball).code); \
     } while (0)
@@ -4263,7 +4273,7 @@ process (char *path)
           if (errno)
             {
               g.inf[len] = 0;
-              complain ("skipping: %s does not exist", g.inf);
+              complain ("%s: No such file or directory", g.inf);
               return;
             }
           len = strnlen (g.inf, g.inz);
@@ -4426,8 +4436,9 @@ process (char *path)
       strcpy (g.outf, "<stdout>");
       g.outd = 1;
       if (!g.decode && !g.force && isatty (g.outd))
-        throw (EINVAL, "trying to write compressed data to a terminal"
-               " (use -f to force)");
+        throw (EINVAL, "compressed data not written to a terminal. " 
+                        "Use -f to force compression.\n"
+                        "For help, type: gzip - h");
     }
   else
     {
@@ -4466,7 +4477,8 @@ process (char *path)
         {
           int ch, reply;
 
-          fprintf (stderr, "%s exists -- overwrite (y/n)? ", g.outf);
+          fprintf (stderr, "gzip: %s already exists; "
+                           "do you wish to overwrite (y or n)", g.outf);
           fflush (stderr);
           reply = -1;
           do
@@ -4725,7 +4737,8 @@ num (char *arg)
     {
       if (*str < '0' || *str > '9' ||
           (val && ((~(size_t) 0) - (size_t) (*str - '0')) / val < 10))
-        throw (EINVAL, "invalid numeric parameter: %s", arg);
+        throw (EINVAL, "'%s' operand is not numeric\n"
+                       "Try `gzip --help' for more information.", arg);
       val = val * 10 + (size_t) (*str - '0');
     }
   while (*++str);
@@ -4869,19 +4882,22 @@ main (int argc, char **argv)
             /* Going to give compression level 11 its own letter later*/
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
-                      if ( (optc - '0') < 0 || (optc - '0') > 9)
-                        throw(EINVAL, "only levels 0..9 are allowed");
                       g.level = optc - '0';
                       break;    
             case 'b': j = num(optarg);
                       g.block = j << 10;                  /* chunk size */
                       if (g.block < DICT)
-                        throw(EINVAL, "block size too small (must be >= 32K)");
+                        throw(EINVAL, "block size too small"
+                                      "(must be >= 32K) -- '%s'\n"
+                                      "Try `gzip --help' for more"
+                                      "information.", optarg);
                       if (j != g.block >> 10 ||
                         OUTPOOL(g.block) < g.block ||
                                (ssize_t)OUTPOOL(g.block) < 0 ||
                                 g.block > (1UL << 29))  /* limited by append_len() */
-                        throw(EINVAL, "block size too large: %s", optarg);
+                        throw(EINVAL, "block size too large -- '%s'\n"
+                                      "Try `gzip --help' for more"
+                                      "information.", optarg);
                       break;
             case 'c':  g.pipeout = 1;  break;
             case 'd':  if (!g.decode) 
@@ -4893,7 +4909,9 @@ main (int argc, char **argv)
             case 'j':  j = num (optarg); /* Use of num function to be removed later */
                        g.procs = (int)j;                   /* # processes */
                        if (g.procs < 1)
-                         throw(EINVAL, "invalid number of processes: %s", optarg);
+                         throw(EINVAL, "invalid number of processes -- '%s'"
+                             "\nTry `gzip --help' for more "
+                             "information", optarg);
                        if ((size_t)g.procs != j || INBUFS(g.procs) < 1)
                          throw(EINVAL, "too many processes: %s", optarg);
 #ifdef NOTHREAD
@@ -4905,7 +4923,7 @@ main (int argc, char **argv)
             case 'K':  g.form = 2;  
                        g.sufx = ".zip";  break;
             case 'l':  g.list = 1;  break;
-            case 'L':  fputs(VERSION, stderr);
+            case 'L':  fputs(VERSION, stderr); /* TODO: Ask professor what we make this */
                        fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
                        fputs("Subject to the terms of the zlib license.\n", stderr);
                        fputs("No warranty is provided or implied.\n", stderr);
@@ -4924,10 +4942,7 @@ main (int argc, char **argv)
             case 'r':  g.recurse = 1;  break;
             case 'R':  g.rsync = 1;  break;
             case 't':  g.decode = 2;  break;
-            case 'S':  if (*optarg == 0)
-                         throw(EINVAL, "suffix cannot be empty");
-                       g.sufx = optarg; /* gz suffix */
-                       break;
+            case 'S':  g.sufx = optarg; break; /* gz suffix */
             case 'v': g.verbosity++;  break;
             case 'V': fputs(VERSION, stderr);
                       if (g.verbosity > 1)
@@ -4937,28 +4952,31 @@ main (int argc, char **argv)
             case 'Y':  g.sync = 1;  break; /* Synchronous option, not in pdf should be added to docs */
             case 'z':  g.form = 1;  
                        g.sufx = ".zz";  break;
-            case ':': throw(EINVAL, "missing mandatory argument"); break;
-            default:  if(optopt)
-                        throw(EINVAL, "unrecognized option: %c", optopt);
-                      else 
-                        throw(EINVAL, "unrecognized option: %s", argv[(int)optind - 1]); break; 
+            case ':': throw(EINVAL, "option requires an argument -- '%c'\n"
+                                    "Try `gzip --help for more information",
+                                    optopt);
+                      break;
+            default:  if(optopt) /* invalid short opt */
+                        throw(EINVAL, "invalid option -- '%c'\nTry `gzip " 
+                                  "--help' for more information.", optopt);
+                      else /* invalid long opt */
+                        throw(EINVAL, "unrecognized option: '%s'\nTry `gzip"
+                                      "--help for more information", 
+                                      argv[(int)optind - 1]); 
+                        break; 
           }
-          argv[(int)optind - 1] = NULL;
         }
 
-      /* Fixes ignoring after --, and lets allows the file processing code to be used, review this */
-      if (argv[(int)optind - 1] != NULL && strcmp(argv[(int)optind - 1], "--") == 0)
-        argv[(int)optind - 1] = NULL;
-
       /* process command-line filenames */
+      /* optind is the start of the files */
       done = 0;
-      for (n = 1; n < argc; n++)
+      for (n = (int)optind; n < argc; n++)
         if (argv[n] != NULL)
-          {
+          { 
             if (done == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
               complain ("warning: output will be concatenated zip files"
                         " -- %s will not be able to extract", g.prog);
-            process (n < nop && strcmp (argv[n], "-") == 0 ? NULL : argv[n]);
+            process (strcmp (argv[n], "-") == 0 ? NULL : argv[n]);
             done++;
           }
 
