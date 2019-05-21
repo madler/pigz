@@ -4759,12 +4759,11 @@ int
 main (int argc, char **argv)
 {
   int n;                        /* general index */
-  int nop;                      /* index before which "-" means stdin */
   int done;                     /* number of named files processed */
   int optc;                     /* For Option Handling */
   size_t j;                     /* ^^^^^^^^^^^^^^^^^^^ */
   size_t k;                     /* program name length */
-  char *opts, *p;               /* environment default options, marker */
+  char *p;                      /* environment default options, marker */
   ball_t err;                   /* error information from throw() */
 
   g.ret = 0;                    /* return code */
