@@ -4628,7 +4628,10 @@ static  char *helptext[] = {
   "  -V  --version        Display version number",
   "  -Y  --synchronous    Force output file write to permanent storage",
   "  -z, --zlib           Compress to zlib (.zz) instead of gzip format",
-  "  --                   All arguments after \"--\" are treated as files"
+  "  --                   All arguments after \"--\" are treated as files",
+  "",
+  "With no FILE, or when FILE is -, read standard input.",
+  "Report bugs to <bug-gzip@gnu.org>."
 };
 
 // Display the help text above.
@@ -4830,12 +4833,12 @@ main (int argc, char **argv)
       /* prepare for interrupts and logging */
       signal (SIGINT, cut_short);
 #ifndef NOTHREAD
-      yarn_prefix = g.prog;       // prefix for yarn error messages
-      yarn_abort = cut_yarn;      // call on thread error
+      yarn_prefix = g.prog;       /* prefix for yarn error messages */
+      yarn_abort = cut_yarn;      /* call on thread error */
 #endif
 #ifdef PIGZ_DEBUG
-      gettimeofday (&start, NULL);        // starting time for log entries
-      log_init ();                // initialize logging
+      gettimeofday (&start, NULL);    /* starting time for log entries */
+      log_init ();                    /* initialize logging */
 #endif
 
       /* set all options to defaults */
@@ -4867,8 +4870,8 @@ main (int argc, char **argv)
 
     /* Error if user has environment variables  */
     /* This could affect people when they update, so ask eggert */
-    if (getenv("GZIP") != NULL)
-        throw(EINVAL, "Environment variable support removed in"
+    if (getenv ("GZIP") != NULL)
+        throw (EINVAL, "Environment variable support removed in"
                       "gzip version x.\nRun `unset GZIP' to fix.");
 
     /* if no arguments and compressed data to/from terminal, show help */
@@ -4886,18 +4889,18 @@ main (int argc, char **argv)
             case '5': case '6': case '7': case '8': case '9':
                       g.level = optc - '0';
                       break;    
-            case 'b': j = num(optarg);
+            case 'b': j = num (optarg);
                       g.block = j << 10;                  /* chunk size */
                       if (g.block < DICT)
-                        throw(EINVAL, "block size too small"
+                        throw (EINVAL, "block size too small"
                                       "(must be >= 32K) -- '%s'\n"
                                       "Try `gzip --help' for more"
                                       "information.", optarg);
                       if (j != g.block >> 10 ||
-                        OUTPOOL(g.block) < g.block ||
-                               (ssize_t)OUTPOOL(g.block) < 0 ||
+                        OUTPOOL (g.block) < g.block ||
+                               (ssize_t)OUTPOOL (g.block) < 0 ||
                                 g.block > (1UL << 29))  /* limited by append_len() */
-                        throw(EINVAL, "block size too large -- '%s'\n"
+                        throw (EINVAL, "block size too large -- '%s'\n"
                                       "Try `gzip --help' for more"
                                       "information.", optarg);
                       break;
@@ -4911,11 +4914,11 @@ main (int argc, char **argv)
             case 'j':  j = num (optarg); /* Use of num function to be removed later */
                        g.procs = (int)j;                   /* # processes */
                        if (g.procs < 1)
-                         throw(EINVAL, "invalid number of processes -- '%s'"
+                         throw (EINVAL, "invalid number of processes -- '%s'"
                              "\nTry `gzip --help' for more "
                              "information", optarg);
-                       if ((size_t)g.procs != j || INBUFS(g.procs) < 1)
-                         throw(EINVAL, "too many processes: %s", optarg);
+                       if ((size_t)g.procs != j || INBUFS (g.procs) < 1)
+                         throw (EINVAL, "too many processes: %s", optarg);
 #ifdef NOTHREAD
                        if (g.procs > 1)
                          throw(EINVAL, "compiled without threads");
@@ -4925,11 +4928,11 @@ main (int argc, char **argv)
             case 'K':  g.form = 2;  
                        g.sufx = ".zip";  break;
             case 'l':  g.list = 1;  break;
-            case 'L':  fputs(VERSION, stderr); /* TODO: Ask professor what we make this */
-                       fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
-                       fputs("Subject to the terms of the zlib license.\n", stderr);
-                       fputs("No warranty is provided or implied.\n", stderr);
-                       exit(0); break;
+            case 'L':  fputs (VERSION, stderr); /* TODO: Ask professor what we make this */
+                       fputs ("Copyright (C) 2007-2017 Mark Adler\n", stderr);
+                       fputs ("Subject to the terms of the zlib license.\n", stderr);
+                       fputs ("No warranty is provided or implied.\n", stderr);
+                       exit (0); break;
             case 'm':  g.headis &= ~0xa;  break;
             case 'M':  g.headis |= 0xa;  break;
             case 'n':  g.headis = 0;  break;
@@ -4937,35 +4940,35 @@ main (int argc, char **argv)
 #ifndef NOZOPFLI
             case 'O':  g.zopts.blocksplitting = 0;  break;
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
-            case 'I':  g.zopts.numiterations = (int)num(optarg);  break; /* optimize iterations */
-            case 'J':  g.zopts.blocksplittingmax = (int)num(optarg);  break; /* max block splits */
+            case 'I':  g.zopts.numiterations = (int)num (optarg);  break; /* optimize iterations */
+            case 'J':  g.zopts.blocksplittingmax = (int)num (optarg);  break; /* max block splits */
 #endif
             case 'q':  g.verbosity = 0;  break;
             case 'r':  g.recurse = 1;  break;
             case 'R':  g.rsync = 1;  break;
             case 't':  g.decode = 2;  break;
             case 'S':  g.sufx = optarg; /* gz suffix */
-                       if (strlen(g.sufx) == 0 || strlen(g.sufx) > 30) /* TODO: DEFINE MAX_SUFFIX AS 30 AND REPLACE */
-                         throw(EINVAL, "invalid suffix '%s'", g.sufx);
+                       if (strlen (g.sufx) == 0 || strlen (g.sufx) > 30) /* TODO: DEFINE MAX_SUFFIX AS 30 AND REPLACE */
+                         throw (EINVAL, "invalid suffix '%s'", g.sufx);
                        break;
             case 'v': g.verbosity++;  break;
-            case 'V': fputs(VERSION, stderr);
+            case 'V': fputs (VERSION, stderr);
                       if (g.verbosity > 1)
-                        fprintf(stderr, "zlib %s\n", zlibVersion());
-                      exit(0);
+                        fprintf (stderr, "zlib %s\n", zlibVersion());
+                      exit (0);
                       break;
             case 'Y':  g.sync = 1;  break; /* Synchronous option, not in pdf should be added to docs */
             case 'z':  g.form = 1;  
                        g.sufx = ".zz";  break;
-            case ':': throw(EINVAL, "option requires an argument -- '%c'\n"
+            case ':': throw (EINVAL, "option requires an argument -- '%c'\n"
                                     "Try `gzip --help' for more information",
                                     optopt);
                       break;
-            default:  if(optopt) /* invalid short opt */
-                        throw(EINVAL, "invalid option -- '%c'\nTry `gzip " 
+            default:  if (optopt) /* invalid short opt */
+                        throw (EINVAL, "invalid option -- '%c'\nTry `gzip " 
                                   "--help' for more information.", optopt);
                       else /* invalid long opt */
-                        throw(EINVAL, "unrecognized option: '%s'\nTry `gzip"
+                        throw (EINVAL, "unrecognized option: '%s'\nTry `gzip"
                                       "--help' for more information", 
                                       argv[(int)optind - 1]); 
                         break; 
