@@ -4803,6 +4803,7 @@ main (int argc, char **argv)
       { "version",     0, 0, 'V' },
       { "synchronous", 0, 0, 'Y' },
       { "zlib",        0, 0, 'z' },
+      /* { "LZW",        0, 0, 'Z' }, */
       { NULL, 0, 0, 0 }
     };
 
@@ -4939,7 +4940,10 @@ main (int argc, char **argv)
             case 'r':  g.recurse = 1;  break;
             case 'R':  g.rsync = 1;  break;
             case 't':  g.decode = 2;  break;
-            case 'S':  g.sufx = optarg; break; /* gz suffix */
+            case 'S':  g.sufx = optarg; /* gz suffix */
+                       if (strlen(g.sufx) == 0 || strlen(g.sufx) > 30) /* TODO: DEFINE MAX_SUFFIX AS 30 AND REPLACE */
+                         throw(EINVAL, "invalid suffix '%s'", g.sufx);
+                       break;
             case 'v': g.verbosity++;  break;
             case 'V': fputs(VERSION, stderr);
                       if (g.verbosity > 1)
