@@ -4865,7 +4865,11 @@ main (int argc, char **argv)
         g.pipeout = 1;
       }
 
-    /* TODO: ERROR MSG SAYING ENVIRONMENT VARS WERE DISABLED IN THIS VERSION OF GZIP? */
+    /* Error if user has environment variables  */
+    /* This could affect people when they update, so ask eggert */
+    if (getenv("GZIP") != NULL)
+        throw(EINVAL, "Environment variable support removed in"
+                      "gzip version x.\nRun `unset GZIP' to fix.");
 
     /* if no arguments and compressed data to/from terminal, show help */
     if (argc < 2 && isatty (g.decode ? 0 : 1))
@@ -4954,7 +4958,7 @@ main (int argc, char **argv)
             case 'z':  g.form = 1;  
                        g.sufx = ".zz";  break;
             case ':': throw(EINVAL, "option requires an argument -- '%c'\n"
-                                    "Try `gzip --help for more information",
+                                    "Try `gzip --help' for more information",
                                     optopt);
                       break;
             default:  if(optopt) /* invalid short opt */
@@ -4962,7 +4966,7 @@ main (int argc, char **argv)
                                   "--help' for more information.", optopt);
                       else /* invalid long opt */
                         throw(EINVAL, "unrecognized option: '%s'\nTry `gzip"
-                                      "--help for more information", 
+                                      "--help' for more information", 
                                       argv[(int)optind - 1]); 
                         break; 
           }
