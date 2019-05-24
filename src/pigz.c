@@ -4851,22 +4851,22 @@ main (int argc, char **argv)
       /* create CRC table, in case zlib compiled with dynamic tables */
       get_crc_table ();  /* !!! new in develop pigz version !!! */
 
-    /* TODO: CHANGE TO ungzip rather than unpigz later on*/
-    /* ENSURE WE ACCEPT zcat, pcat, gcat, and gzcat */
-    /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
-    if (strcmp (g.prog, "unpigz") == 0 || strcmp (g.prog, "gunzip") == 0)
-      {
-        if (!g.decode)
-          g.headis >>= 2;
-        g.decode = 1;
-      }
-    if ((k = strlen (g.prog)) > 2 && strcmp (g.prog + k - 3, "cat") == 0)
-      {
-        if (!g.decode)
-          g.headis >>= 2;
-        g.decode = 1;
-        g.pipeout = 1;
-      }
+      /* TODO: CHANGE TO ungzip rather than unpigz later on*/
+      /* ENSURE WE ACCEPT zcat, pcat, gcat, and gzcat */
+      /* decompress if named "unpigz" or "gunzip", to stdout if "*cat" */
+      if (strcmp (g.prog, "unpigz") == 0 || strcmp (g.prog, "gunzip") == 0)
+        {
+          if (!g.decode)
+            g.headis >>= 2;
+          g.decode = 1;
+        }
+      if ((k = strlen (g.prog)) > 2 && strcmp (g.prog + k - 3, "cat") == 0)
+        {
+          if (!g.decode)
+             g.headis >>= 2;
+          g.decode = 1;
+          g.pipeout = 1;
+        }
 
     /* Error if user has environment variables  */
     /* This could affect people when they update, so ask eggert */
@@ -4884,17 +4884,20 @@ main (int argc, char **argv)
         switch (optc)
           {
             /* Z and a are NOT supported by pigz! */
-            /* Going to give compression level 11 its own letter later*/
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
-                      g.level = optc - '0';
+                      if (g.level == 1 && (optc - '0') == 1)
+                        g.level = 11;
+                      else
+                        g.level = optc - '0';
+                      printf("%d ", g.level);
                       break;    
             case 'b': j = num (optarg);
                       g.block = j << 10;                  /* chunk size */
                       if (g.block < DICT)
                         throw (EINVAL, "block size too small"
                                       "(must be >= 32K) -- '%s'\n"
-                                      "Try `gzip --help' for more"
+                                     f "Try `gzip --help' for more"
                                       "information.", optarg);
                       if (j != g.block >> 10 ||
                         OUTPOOL (g.block) < g.block ||
