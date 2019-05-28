@@ -4868,114 +4868,114 @@ main (int argc, char **argv)
           g.pipeout = 1;
         }
 
-    /* Error if user has environment variables  */
-    /* This could affect people when they update, so ask eggert */
-    if (getenv ("GZIP") != NULL)
+      /* Error if user has environment variables  */
+      /* This could affect people when they update, so ask eggert */
+      if (getenv ("GZIP") != NULL)
         throw (EINVAL, "Environment variable support removed in"
                       "gzip version x.\nRun `unset GZIP' to fix.");
 
-    /* if no arguments and compressed data to/from terminal, show help */
-    if (argc < 2 && isatty (g.decode ? 0 : 1))
-      help ();
+      /* if no arguments and compressed data to/from terminal, show help */
+      if (argc < 2 && isatty (g.decode ? 0 : 1))
+        help ();
 
-    /* process all command-line options first, move to own function later */
-    while ((optc = getopt_long(argc, argv, short_options, long_options, NULL)) != -1)
-      {
-        switch (optc)
-          {
-            /* Z and a are NOT supported by pigz! */
-            case '0': case '1': case '2': case '3': case '4':
-            case '5': case '6': case '7': case '8': case '9':
-                      if (g.level == 1 && (optc - '0') == 1)
-                        g.level = 11;
-                      else
-                        g.level = optc - '0';
-                      printf("%d ", g.level);
-                      break;    
-            case 'b': j = num (optarg);
-                      g.block = j << 10;                  /* chunk size */
-                      if (g.block < DICT)
-                        throw (EINVAL, "block size too small"
-                                      "(must be >= 32K) -- '%s'\n"
-                                     f "Try `gzip --help' for more"
-                                      "information.", optarg);
-                      if (j != g.block >> 10 ||
-                        OUTPOOL (g.block) < g.block ||
-                               (ssize_t)OUTPOOL (g.block) < 0 ||
-                                g.block > (1UL << 29))  /* limited by append_len() */
-                        throw (EINVAL, "block size too large -- '%s'\n"
-                                      "Try `gzip --help' for more"
-                                      "information.", optarg);
-                      break;
-            case 'c':  g.pipeout = 1;  break;
-            case 'd':  if (!g.decode) 
-                         g.headis >>= 2;  
-                       g.decode = 1;  break;
-            case 'f':  g.force = 1;  break;
-            case 'h':  help ();  break;
-            case 'i':  g.setdict = 0;  break;
-            case 'j':  j = num (optarg); /* Use of num function to be removed later */
-                       g.procs = (int)j;                   /* # processes */
-                       if (g.procs < 1)
-                         throw (EINVAL, "invalid number of processes -- '%s'"
-                             "\nTry `gzip --help' for more "
-                             "information", optarg);
-                       if ((size_t)g.procs != j || INBUFS (g.procs) < 1)
-                         throw (EINVAL, "too many processes: %s", optarg);
+      /* process all command-line options first, move to own function later */
+      while ((optc = getopt_long(argc, argv, short_options, long_options, NULL)) != -1)
+        {
+          switch (optc)
+            {
+              /* Z and a are NOT supported by pigz! */
+              case '0': case '1': case '2': case '3': case '4':
+              case '5': case '6': case '7': case '8': case '9':
+                        if (g.level == 1 && (optc - '0') == 1)
+                          g.level = 11;
+                        else
+                          g.level = optc - '0';
+                        printf("%d ", g.level);
+                        break;
+              case 'b': j = num (optarg);
+                        g.block = j << 10;                  /* chunk size */
+                        if (g.block < DICT)
+                          throw (EINVAL, "block size too small"
+                                        "(must be >= 32K) -- '%s'\n"
+                                        "Try `gzip --help' for more"
+                                        "information.", optarg);
+                        if (j != g.block >> 10 ||
+                          OUTPOOL (g.block) < g.block ||
+                                 (ssize_t)OUTPOOL (g.block) < 0 ||
+                                  g.block > (1UL << 29))  /* limited by append_len() */
+                          throw (EINVAL, "block size too large -- '%s'\n"
+                                        "Try `gzip --help' for more"
+                                        "information.", optarg);
+                        break;
+              case 'c':  g.pipeout = 1;  break;
+              case 'd':  if (!g.decode)
+                           g.headis >>= 2;
+                         g.decode = 1;  break;
+              case 'f':  g.force = 1;  break;
+              case 'h':  help ();  break;
+              case 'i':  g.setdict = 0;  break;
+              case 'j':  j = num (optarg); /* Use of num function to be removed later */
+                         g.procs = (int)j;                   /* # processes */
+                         if (g.procs < 1)
+                           throw (EINVAL, "invalid number of processes -- '%s'"
+                               "\nTry `gzip --help' for more "
+                               "information", optarg);
+                         if ((size_t)g.procs != j || INBUFS (g.procs) < 1)
+                           throw (EINVAL, "too many processes: %s", optarg);
 #ifdef NOTHREAD
-                       if (g.procs > 1)
-                         throw(EINVAL, "compiled without threads");
+                         if (g.procs > 1)
+                           throw(EINVAL, "compiled without threads");
 #endif
-                       break;
-            case 'k':  g.keep = 1;  break;
-            case 'K':  g.form = 2;  
-                       g.sufx = ".zip";  break;
-            case 'l':  g.list = 1;  break;
-            case 'L':  fputs (VERSION, stderr); /* TODO: Ask professor what we make this */
-                       fputs ("Copyright (C) 2007-2017 Mark Adler\n", stderr);
-                       fputs ("Subject to the terms of the zlib license.\n", stderr);
-                       fputs ("No warranty is provided or implied.\n", stderr);
-                       exit (0); break;
-            case 'm':  g.headis &= ~0xa;  break;
-            case 'M':  g.headis |= 0xa;  break;
-            case 'n':  g.headis = 0;  break;
-            case 'N':  g.headis = 0xf;  break;
+                         break;
+              case 'k':  g.keep = 1;  break;
+              case 'K':  g.form = 2;
+                         g.sufx = ".zip";  break;
+              case 'l':  g.list = 1;  break;
+              case 'L':  fputs (VERSION, stderr); /* TODO: Ask professor what we make this */
+                         fputs ("Copyright (C) 2007-2017 Mark Adler\n", stderr);
+                         fputs ("Subject to the terms of the zlib license.\n", stderr);
+                         fputs ("No warranty is provided or implied.\n", stderr);
+                         exit (0); break;
+              case 'm':  g.headis &= ~0xa;  break;
+              case 'M':  g.headis |= 0xa;  break;
+              case 'n':  g.headis = 0;  break;
+              case 'N':  g.headis = 0xf;  break;
 #ifndef NOZOPFLI
-            case 'O':  g.zopts.blocksplitting = 0;  break;
-            case 'F':  g.zopts.blocksplittinglast = 1;  break;
-            case 'I':  g.zopts.numiterations = (int)num (optarg);  break; /* optimize iterations */
-            case 'J':  g.zopts.blocksplittingmax = (int)num (optarg);  break; /* max block splits */
+              case 'O':  g.zopts.blocksplitting = 0;  break;
+              case 'F':  g.zopts.blocksplittinglast = 1;  break;
+              case 'I':  g.zopts.numiterations = (int)num (optarg);  break; /* optimize iterations */
+              case 'J':  g.zopts.blocksplittingmax = (int)num (optarg);  break; /* max block splits */
 #endif
-            case 'q':  g.verbosity = 0;  break;
-            case 'r':  g.recurse = 1;  break;
-            case 'R':  g.rsync = 1;  break;
-            case 't':  g.decode = 2;  break;
-            case 'S':  g.sufx = optarg; /* gz suffix */
-                       if (strlen (g.sufx) == 0 || strlen (g.sufx) > 30) /* TODO: DEFINE MAX_SUFFIX AS 30 AND REPLACE */
-                         throw (EINVAL, "invalid suffix '%s'", g.sufx);
-                       break;
-            case 'v': g.verbosity++;  break;
-            case 'V': fputs (VERSION, stderr);
-                      if (g.verbosity > 1)
-                        fprintf (stderr, "zlib %s\n", zlibVersion());
-                      exit (0);
-                      break;
-            case 'Y':  g.sync = 1;  break; /* Synchronous option, not in pdf should be added to docs */
-            case 'z':  g.form = 1;  
-                       g.sufx = ".zz";  break;
-            case ':': throw (EINVAL, "option requires an argument -- '%c'\n"
-                                    "Try `gzip --help' for more information",
-                                    optopt);
-                      break;
-            default:  if (optopt) /* invalid short opt */
-                        throw (EINVAL, "invalid option -- '%c'\nTry `gzip " 
-                                  "--help' for more information.", optopt);
-                      else /* invalid long opt */
-                        throw (EINVAL, "unrecognized option: '%s'\nTry `gzip"
-                                      "--help' for more information", 
-                                      argv[(int)optind - 1]); 
-                        break; 
-          }
+              case 'q':  g.verbosity = 0;  break;
+              case 'r':  g.recurse = 1;  break;
+              case 'R':  g.rsync = 1;  break;
+              case 't':  g.decode = 2;  break;
+              case 'S':  g.sufx = optarg; /* gz suffix */
+                         if (strlen (g.sufx) == 0 || strlen (g.sufx) > 30) /* TODO: DEFINE MAX_SUFFIX AS 30 AND REPLACE */
+                           throw (EINVAL, "invalid suffix '%s'", g.sufx);
+                         break;
+              case 'v': g.verbosity++;  break;
+              case 'V': fputs (VERSION, stderr);
+                        if (g.verbosity > 1)
+                          fprintf (stderr, "zlib %s\n", zlibVersion());
+                        exit (0);
+                        break;
+              case 'Y':  g.sync = 1;  break; /* Synchronous option, not in pdf should be added to docs */
+              case 'z':  g.form = 1;
+                         g.sufx = ".zz";  break;
+              case ':': throw (EINVAL, "option requires an argument -- '%c'\n"
+                                      "Try `gzip --help' for more information",
+                                      optopt);
+                        break;
+              default:  if (optopt) /* invalid short opt */
+                          throw (EINVAL, "invalid option -- '%c'\nTry `gzip "
+                                    "--help' for more information.", optopt);
+                        else /* invalid long opt */
+                          throw (EINVAL, "unrecognized option: '%s'\nTry `gzip"
+                                        "--help' for more information",
+                                        argv[(int)optind - 1]);
+                          break;
+            }
         }
 
       /* process command-line filenames */
