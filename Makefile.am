@@ -4,6 +4,7 @@ bin_PROGRAMS = pigz
 pigz_LDADD = $(LIBOBJS)
 pigz_SOURCES = \
 	       src/pigz.c \
+	       src/util.c \
 	       lib/try.c \
 	       lib/try.h \
 	       lib/yarn.c \
