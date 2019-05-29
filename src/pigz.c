@@ -324,7 +324,6 @@
 #define _FILE_OFFSET_BITS 64
 
 /* Included headers and expected functions, vars, types, etc */
-// Removed stdio.h
 #include <stdlib.h>     /* exit(), malloc(), free(), realloc(), atol(), atoi(),
                          * getenv() */
 #include <stdarg.h>     /* va_start(), va_arg(), va_end(), va_list */
@@ -332,10 +331,8 @@
                          * strncpy(), strlen(), strcat(), strrchr(),
                          * strerror() 
                          */
-// Removed errno.h
 #include <assert.h>     /* assert() */
 #include <time.h>       /* ctime(), time(), time_t, mktime() */
-// Removed signal.h
 #include <sys/types.h>  /* ssize_t */
 #include <sys/stat.h>   /* chmod(), stat(), fstat(), lstat(), struct stat,
                          * S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
@@ -352,8 +349,6 @@
                          */
 #include <limits.h>     /* UINT_MAX, INT_MAX  */
 #include <getopt.h>     /* getopt_long  */
-
-// Removed #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 
 #ifdef PIGZ_DEBUG
 #if defined(__APPLE__)
@@ -375,17 +370,7 @@
 #include <sys/pstat.h>
 #endif
 
-#ifndef S_IFLNK
-#define S_IFLNK 0
-#endif
-
-#ifdef __MINGW32__
-#define chown(p,o,g) 0
-#define utimes(p,t)  0
-#define lstat(p,s)   stat(p,s)
-#define _exit(s)     exit(s)
-#endif
-
+#include "tailor.h"
 #include "util.c"
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(),
                          * deflateEnd(), deflateSetDictionary(), crc32(),
@@ -398,70 +383,12 @@
 #error "Need zlib version 1.2.3 or later"
 #endif
 
-// Removed ifndef NOTHREAD 
-
-
 #ifndef NOZOPFLI
 #include "lib/zopfli/deflate.h"    /* ZopfliDeflatePart(),
                                     * ZopfliInitOptions(),
                                     * ZopfliOptions
                                     */
 #endif
-
-// Removed #include "lib/try.h"
-
-// Removed Prevent end-of-line conversions on MSDOSish operating systems.
-
-// Removed Release an allocated pointer, if allocated, and mark as unallocated.
-
-// Removed Sliding dictionary size for deflate.
-
-// Removed Largest power of 2 that fits in an unsigned int. Used to limit requests to
-// zlib functions that use unsigned int lengths.
-
-// Removed Initial pool counts and sizes
-
-// Removed Input buffer size, and augmentation for re-inserting a central header.
-
-// Removed rsyncable constants
-
-// Removed Globals 
-
-// Removed complain
-
-// Removed #ifdef PIGZ_DEBUG Memory tracking.
-
-// Removed Logging.
-
-// Removed cut_short
-
-// Removed Common code for catch block of top routine in the thread.
-
-// Removed grow
-
-// Removed vmemcpy
-
-// Removed vstrcopy
-
-// Removed readn
-
-// Removed time2dos
-
-// Removed writen
-
-// Removed put
-
-// Removed put_header
-
-// Removed put_trailer 
-
-// Removed adler32z
-
-// Removed crc32z
-
-// Removed zlib_vernum
-
-// Removed -- threaded portions of pigz --
 
 #ifndef NOTHREAD
 // -- pool of spaces for buffer management --
