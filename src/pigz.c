@@ -370,7 +370,17 @@
 #include <sys/pstat.h>
 #endif
 
-#include "tailor.h"
+#ifndef S_IFLNK
+#define S_IFLNK 0
+#endif
+
+#ifdef __MINGW32__
+#define chown(p,o,g) 0
+#define utimes(p,t)  0
+#define lstat(p,s)   stat(p,s)
+#define _exit(s)     exit(s)
+#endif
+
 #include "util.c"
 #include "zlib.h"       /* deflateInit2(), deflateReset(), deflate(),
                          * deflateEnd(), deflateSetDictionary(), crc32(),
