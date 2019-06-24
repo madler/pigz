@@ -188,7 +188,7 @@
                        Fix sign error in compression reduction percentage
  */
 
-#define VERSION "pigz 2.4.1x\n"
+#define VERSION "pigz 2.4.1x"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
@@ -4408,11 +4408,10 @@ local int option(char *arg) {
 #endif
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
-                fputs(VERSION, stderr);
-                fputs("Copyright (C) 2007-2017 Mark Adler\n", stderr);
-                fputs("Subject to the terms of the zlib license.\n",
-                      stderr);
-                fputs("No warranty is provided or implied.\n", stderr);
+                puts(VERSION);
+                puts("Copyright (C) 2007-2017 Mark Adler");
+                puts("Subject to the terms of the zlib license.");
+                puts("No warranty is provided or implied.");
                 exit(0);
             case 'M':  g.headis |= 0xa;  break;
             case 'N':  g.headis = 0xf;  break;
@@ -4423,9 +4422,9 @@ local int option(char *arg) {
             case 'S':  get = 3;  break;
                 // -T defined below as an alternative for -m
             case 'V':
-                fputs(VERSION, stderr);
+                puts(VERSION);
                 if (g.verbosity > 1)
-                    fprintf(stderr, "zlib %s\n", zlibVersion());
+                    printf("zlib %s\n", zlibVersion());
                 exit(0);
             case 'Y':  g.sync = 1;  break;
             case 'Z':
