@@ -1,7 +1,15 @@
 CC=gcc
 CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas
 LDFLAGS=
-LIBS=-lm -lpthread -lz
+#LIBS=-lm -lpthread -lz
+LIBS=-lm -lpthread  -I./linux ./linux/libz.a
+ifneq ($(OS),Windows_NT)
+	OS = $(shell uname)
+ 	ifeq "$(OS)" "Darwin"
+		LIBS=-lm -lpthread  -I./darwin ./darwin/libz.a	
+	endif
+endif
+
 ZOPFLI=zopfli/src/zopfli/
 ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o
 
