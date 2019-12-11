@@ -7,8 +7,8 @@ Be aware that some pigz does not work on some [Linux systems](https://github.com
 ## Installing
 
 You can get the accelerated pigz from the command line for Linux (Ubunut 16.04 and later) or MacOS:
-   * `curl -fLO https://github.com/neurolabusc/pigz/releases/latest/download/niiSmooth_lnx.zip`
-   * `curl -fLO https://github.com/neurolabusc/pigz/releases/latest/download/niiSmooth_mac.zip`
+   * `curl -fLO https://github.com/neurolabusc/pigz/releases/latest/download/pigz_lnx.zip`
+   * `curl -fLO https://github.com/neurolabusc/pigz/releases/latest/download/pigz_mac.zip`
 
 ## Compiling you own copy
 
