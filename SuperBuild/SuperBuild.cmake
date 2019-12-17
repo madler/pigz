@@ -5,7 +5,7 @@ if(NOT GIT_FOUND)
 endif()
 
 # Use git protocol or not
-option(USE_GIT_PROTOCOL "If behind a firewall turn this off to use http instead." ON)
+option(USE_GIT_PROTOCOL "If behind a firewall turn this off to use http instead." OFF)
 if(USE_GIT_PROTOCOL)
     set(git_protocol "git")
 else()
@@ -63,11 +63,23 @@ elseif(${ZLIB_IMPLEMENTATION} STREQUAL "Custom")
     endif()
 endif()
 
+ExternalProject_Add(pigz
+    DEPENDS ${DEPENDENCIES}
+    DOWNLOAD_COMMAND ""
+    SOURCE_DIR ${CMAKE_SOURCE_DIR}/src
+    BINARY_DIR pigz-build
+    CMAKE_ARGS
+        -Wno-dev
+        --no-warn-unused-cli
+        -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
+        -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_BINARY_DIR}
+        -DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS}
+        -DCMAKE_CXX_FLAGS:STRING=${CMAKE_CXX_FLAGS}
+        -DCMAKE_VERBOSE_MAKEFILE:BOOL=${CMAKE_VERBOSE_MAKEFILE}
+        -DUSE_STATIC_RUNTIME:BOOL=${USE_STATIC_RUNTIME}
+        -DZLIB_IMPLEMENTATION:STRING=${ZLIB_IMPLEMENTATION}
+        -DZLIB_ROOT:PATH=${ZLIB_ROOT}
+)
+
 install(DIRECTORY ${CMAKE_BINARY_DIR}/bin/ DESTINATION bin
         USE_SOURCE_PERMISSIONS)
-
-option(BUILD_DOCS "Build documentation (manpages)" OFF)
-if(BUILD_DOCS)
-    add_subdirectory(docs)
-endif()
-
