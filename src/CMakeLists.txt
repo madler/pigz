@@ -1,8 +1,6 @@
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.1.0)
 
 project(pigz)
-
-include(${CMAKE_SOURCE_DIR}/SuperBuild/SuperBuild.cmake)
 
 # Option Choose whether to use static runtime
 include(ucm.cmake)
@@ -58,7 +56,7 @@ if(UNIX)
     endif()
 endif()
 
-set(PROGRAMS pigz)
+set(PROGRAMS ${PROJECT_NAME})
 
 set(PIGZ_SRCS
 	pigz.c
@@ -73,28 +71,25 @@ set(PIGZ_SRCS
 	zopfli/src/zopfli/util.c
 	zopfli/src/zopfli/squeeze.c
 	zopfli/src/zopfli/katajainen.c)
-	
-set(ZLIB_ROOT ${DEP_INSTALL_DIR})
 
-option(USE_JPEGLS "Build with JPEG-LS support using CharLS" OFF)
-if(USE_JPEGLS)
-    add_executable(pigz ${PIGZ_SRCS})
-else()
-    add_executable(pigz ${PIGZ_SRCS})
-endif()
+add_executable(${PROJECT_NAME} ${PIGZ_SRCS})
+
+target_link_libraries(${PROJECT_NAME} m)
+
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+target_link_libraries(${PROJECT_NAME} Threads::Threads)
 
 set(ZLIB_IMPLEMENTATION "System" CACHE STRING "Choose zlib implementation.")
-set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "Miniz;System;Custom")
-if(NOT ${ZLIB_IMPLEMENTATION} STREQUAL "Miniz")
-    if(NOT ${ZLIB_IMPLEMENTATION} STREQUAL "System")
-        set(ZLIB_ROOT ${ZLIB_ROOT} CACHE PATH "Specify custom zlib root directory.")
-        if(NOT ZLIB_ROOT)
-            message(FATAL_ERROR "ZLIB_ROOT needs to be set to locate custom zlib!")
-        endif()
+set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "System;Custom")
+if(NOT ${ZLIB_IMPLEMENTATION} STREQUAL "System")
+    set(ZLIB_ROOT ${ZLIB_ROOT} CACHE PATH "Specify custom zlib root directory.")
+    if(NOT ZLIB_ROOT)
+        message(FATAL_ERROR "ZLIB_ROOT needs to be set to locate custom zlib!")
     endif()
-    find_package(ZLIB REQUIRED)
-    target_include_directories(pigz PRIVATE ${ZLIB_INCLUDE_DIRS})
-    target_link_libraries(pigz ${ZLIB_LIBRARIES})
 endif()
+find_package(ZLIB REQUIRED)
+target_include_directories(${PROJECT_NAME} PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME} ${ZLIB_LIBRARIES})
 
 install(TARGETS ${PROGRAMS} DESTINATION bin)
