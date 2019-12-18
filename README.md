@@ -1,18 +1,22 @@
 ## About
 
-The GZip format is a popular format for file compression. For example, it is widely used in Neuroimaging, for example in the NIfTI format (e.g. [FSL](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/) and [AFNI](https://afni.nimh.nih.gov)) and AFNI's BRIK format. While GZip is very fast to decompress, it is slow to create compressed files. One solution to this problem is [pigz](https://zlib.net/pigz/) which leverages the fact that modern computers have multiple cores to compress sections of your file in parallel. With pigz, a system with four cores can compress files about twice as quick. A second approach is to use [modern computer instructions](https://github.com/cloudflare/zlib) to accelerate compression. This approach leverages instructions built into modern computers since 2009. This project combines these two approaches, building pigz using the Cloudflare accelerated zlib.
+The GZip format is a popular format for file compression. For example, it is widely used in Neuroimaging, for example in the NIfTI format (e.g. [FSL](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/) and [AFNI](https://afni.nimh.nih.gov)) and AFNI's BRIK format. While GZip is very fast to decompress, it is slow to create compressed files. One solution to this problem is [pigz](https://zlib.net/pigz/) which leverages the fact that modern computers have multiple cores to compress sections of your file in parallel. With pigz, a system with four cores can compress files about twice as quick. A second approach is to use [modern computer instructions](https://github.com/cloudflare/zlib) to accelerate compression. This approach leverages instructions built into modern computers since 2009. 
+
+This project combines these two approaches, building pigz using the Cloudflare accelerated zlib. This repository also includes a [CMake build script](https://github.com/madler/pigz/issues/62) to ease cross platform support (using @ningfei's superbuild scripts).
 
 Be aware that some pigz does not work on some [Linux systems](https://github.com/madler/pigz/issues/68) and will generate an `internal threads error`. In my experience, most Linux distributions work fine.
 
 ## Installing
 
-You can get the accelerated pigz from the command line for Linux (Ubunut 16.04 and later) or MacOS:
-   * `curl -fLO https://github.com/neurolabusc/pigz/releases/latest/download/pigz_lnx.zip`
-   * `curl -fLO https://github.com/neurolabusc/pigz/releases/latest/download/pigz_mac.zip`
+The recommended method is to compile your own copy of pigz. This will ensure that pigz is built using the latest [glibc](https://github.com/madler/pigz/issues/68) version on your system
+```
+git clone https://github.com/neurolabusc/pigz.git
+cd pigz
+mkdir build && cd build
+```
 
-## Compiling you own copy
 
-The included make file will build a copy. At the moment, this uses a pre-compiled version of the Cloudflare zlib, but you can also use the [dcm2niix](https://github.com/rordenlab/dcm2niix) CMake option `-DZLIB_IMPLEMENTATION=Cloudflare` to rebuild this library (e.g. if you have an old Linux distribution).
+You can get a precompiled version by going to the  [releases](https://github.com/neurolabusc/pigz/releases) tab. Different Linux versions are provided, e.g. for Ubuntu 16.04, 18.04 or 19.10. You should use the latest version supported by your system, as [glibc](https://github.com/madler/pigz/issues/68) has been improved to fix parallel threading issues.
 
 ## Installation and testing
 
