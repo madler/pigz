@@ -2399,10 +2399,9 @@ local void single_compress(int reset) {
                     }
                 }
                 else
-#else
-                {
                     DEFLATE_WRITE(Z_SYNC_FLUSH);
-                }
+#else
+                DEFLATE_WRITE(Z_SYNC_FLUSH);
 #endif
                 if (!g.setdict)             // two markers when independent
                     DEFLATE_WRITE(Z_FULL_FLUSH);
