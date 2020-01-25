@@ -3570,7 +3570,7 @@ local void infchk(void) {
         complain("warning: %s: entries after the first were ignored", g.inf);
 
     // check for non-gzip after gzip stream, or anything after zlib stream
-    else if ((g.form == 0 && ret != -1) ||
+    else if ((g.verbosity > 1 && g.form == 0 && ret != -1) ||
              (g.form == 1 && (GET(), !g.in_eof)))
         complain("warning: %s: trailing junk was ignored", g.inf);
 }
