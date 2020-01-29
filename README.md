@@ -8,11 +8,14 @@ Be aware that some pigz does not work on some [Linux systems](https://github.com
 
 ## Installing
 
-The recommended method is to compile your own copy of pigz. This will ensure that pigz is built using the latest [glibc](https://github.com/madler/pigz/issues/68) version on your system
+The recommended method is to compile your own copy of pigz. This will ensure that pigz is built using the latest [glibc](https://github.com/madler/pigz/issues/68) version on your system:
+
 ```
 git clone https://github.com/neurolabusc/pigz.git
 cd pigz
 mkdir build && cd build
+cmake ..
+make
 ```
 
 
@@ -35,6 +38,7 @@ real	0m7.264s
 /usr/local/bin/pigz
 >sudo cp /usr/local/bin/pigz /usr/local/bin/pigz_old
 >sudo cp ./pigz /usr/local/bin/pigz
+>time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.brik.gz rest.nii 
 ....
 real	0m6.343s
 ```
