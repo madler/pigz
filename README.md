@@ -8,7 +8,7 @@ Be aware that some pigz does not work on some [Linux systems](https://github.com
 
 ## Installing
 
-The recommended method is to compile your own copy of pigz. This will ensure that pigz is built using the latest [glibc](https://github.com/madler/pigz/issues/68) version on your system:
+The recommended method is to compile your own copy of pigz. This will ensure that pigz is built using the latest [glibc](https://github.com/madler/pigz/issues/68) version on your system (which will use the [CloudFlare zlib](https://github.com/cloudflare/zlib) by default) which is currently the best performing option:
 
 ```
 git clone https://github.com/neurolabusc/pigz.git
@@ -18,6 +18,26 @@ cmake ..
 make
 ```
 
+Alternatively, you can build for [zlib-ng](https://github.com/zlib-ng/zlib-ng):
+
+```
+git clone https://github.com/neurolabusc/pigz.git
+cd pigz
+mkdir build && cd build
+-DZLIB_IMPLEMENTATION=ng ..
+make
+```
+
+
+Finally, you can build for your system zlib, which will likely provide the poorest performance:
+
+```
+git clone https://github.com/neurolabusc/pigz.git
+cd pigz
+mkdir build && cd build
+-DZLIB_IMPLEMENTATION=System ..
+make
+```
 
 You can get a precompiled version by going to the  [releases](https://github.com/neurolabusc/pigz/releases) tab. Different Linux versions are provided, e.g. for Ubuntu 16.04, 18.04 or 19.10. You should use the latest version supported by your system, as [glibc](https://github.com/madler/pigz/issues/68) has been improved to fix parallel threading issues.
 
