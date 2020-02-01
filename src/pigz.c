@@ -321,6 +321,14 @@
    buffers to about the same number.
  */
 
+#if defined(_MSC_VER)
+//#include <cstdint>
+#include <BaseTsd.h>
+//#include <winbase.h>
+typedef unsigned short uint_least16_t;
+typedef SSIZE_T ssize_t;
+#endif
+
 // Use large file functions if available.
 #define _FILE_OFFSET_BITS 64
 
@@ -341,13 +349,19 @@
 #include <sys/types.h>  // ssize_t
 #include <sys/stat.h>   // chmod(), stat(), fstat(), lstat(), struct stat,
                         // S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
-#include <sys/time.h>   // utimes(), gettimeofday(), struct timeval
-#include <unistd.h>     // unlink(), _exit(), read(), write(), close(),
-                        // lseek(), isatty(), chown(), fsync()
-#include <fcntl.h>      // open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
-                        // O_WRONLY, fcntl(), F_FULLFSYNC
+#ifndef _MSC_VER
+  #include <sys/time.h>   // utimes(), gettimeofday(), struct timeval
+  #include <unistd.h>     // unlink(), _exit(), read(), write(), close(),
+                          // lseek(), isatty(), chown(), fsync()
+
+#else
+ #include <winsock2.h>
+ #include <pthread.h>
+#endif
 #include <dirent.h>     // opendir(), readdir(), closedir(), DIR,
                         // struct dirent
+#include <fcntl.h>      // open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
+                        // O_WRONLY, fcntl(), F_FULLFSYNC
 #include <limits.h>     // UINT_MAX, INT_MAX
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #  include <inttypes.h> // intmax_t, uintmax_t
@@ -380,6 +394,13 @@
 #  define S_IFLNK 0
 #endif
 
+#ifdef _MSC_VER
+#  define chown(p,o,g) 0
+#  define utimes(p,t)  0
+#  define lstat(p,s)   stat(p,s)
+#  define _exit(s)     exit(s)
+#endif
+
 #ifdef __MINGW32__
 #  define chown(p,o,g) 0
 #  define utimes(p,t)  0
@@ -404,6 +425,8 @@
 #endif
 
 #ifndef NOZOPFLI
+
+
 #  include "zopfli/src/zopfli/deflate.h"    // ZopfliDeflatePart(),
                                             // ZopfliInitOptions(),
                                             // ZopfliOptions
@@ -661,7 +684,9 @@ local void zlib_free(voidpf opaque, voidpf address) {
 
 #define REALLOC(p, s) realloc_track(&mem_track, p, s)
 #define FREE(p) free_track(&mem_track, p)
-#define OPAQUE (&mem_track)
+#define OPAQUEz (&mem_track)
+
+
 #define ZALLOC zlib_alloc
 #define ZFREE zlib_free
 
@@ -669,7 +694,7 @@ local void zlib_free(voidpf opaque, voidpf address) {
 
 #define REALLOC realloc
 #define FREE free
-#define OPAQUE Z_NULL
+#define OPAQUEz Z_NULL
 #define ZALLOC Z_NULL
 #define ZFREE Z_NULL
 
@@ -1633,7 +1658,7 @@ local void compress_thread(void *dummy) {
         // initialize the deflate stream for this thread
         strm.zfree = ZFREE;
         strm.zalloc = ZALLOC;
-        strm.opaque = OPAQUE;
+        strm.opaque = OPAQUEz;
         ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
@@ -2221,7 +2246,7 @@ local void single_compress(int reset) {
         strm = alloc(NULL, sizeof(z_stream));
         strm->zfree = ZFREE;
         strm->zalloc = ZALLOC;
-        strm->opaque = OPAQUE;
+        strm->opaque = OPAQUEz;
         ret = deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
@@ -3257,7 +3282,7 @@ local void infchk(void) {
         g.out_check = CHECK(0L, Z_NULL, 0);
         strm.zalloc = ZALLOC;
         strm.zfree = ZFREE;
-        strm.opaque = OPAQUE;
+        strm.opaque = OPAQUEz;
         ret = inflateBackInit(&strm, 15, out_buf);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
@@ -3626,6 +3651,72 @@ local void touch(char *path, time_t t) {
     (void)utimes(path, times);
 }
 
+
+
+#ifdef _MSC_VER
+/* http://ab-initio.mit.edu/octave-Faddeeva/gnulib/lib/fsync.c
+   Emulate fsync on platforms that lack it, primarily Windows and
+   cross-compilers like MinGW.
+
+   This is derived from sqlite3 sources.
+   http://www.sqlite.org/cvstrac/rlog?f=sqlite/src/os_win.c
+   http://www.sqlite.org/copyright.html
+
+   Written by Richard W.M. Jones <rjones.at.redhat.com>
+
+   Copyright (C) 2008-2012 Free Software Foundation, Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public
+   License as published by the Free Software Foundation; either
+   version 2.1 of the License, or (at your option) any later version.
+
+   This library is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+int fsync (int fd) {
+  HANDLE h = (HANDLE) _get_osfhandle (fd);
+  DWORD err;
+
+  if (h == INVALID_HANDLE_VALUE)
+    {
+      errno = EBADF;
+      return -1;
+    }
+
+  if (!FlushFileBuffers (h))
+    {
+      /* Translate some Windows errors into rough approximations of Unix
+       * errors.  MSDN is useless as usual - in this case it doesn't
+       * document the full range of errors.
+       */
+      err = GetLastError ();
+      switch (err)
+        {
+        case ERROR_ACCESS_DENIED:
+          /* For a read-only handle, fsync should succeed, even though we have
+             no way to sync the access-time changes.  */
+          return 0;
+
+          /* eg. Trying to fsync a tty. */
+        case ERROR_INVALID_HANDLE:
+          errno = EINVAL;
+          break;
+
+        default:
+          errno = EIO;
+        }
+      return -1;
+    }
+
+  return 0;
+}
+#endif /* !Windows */
+
 // Request that all data buffered by the operating system for g.outd be written
 // to the permanent storage device. If fsync(fd) is used (POSIX), then all of
 // the data is sent to the device, but will likely be buffered in volatile
@@ -3640,10 +3731,16 @@ local void touch(char *path, time_t t) {
 local void out_push(void) {
     if (g.outd == -1)
         return;
-#ifdef F_FULLSYNC
-    int ret = fcntl(g.outd, F_FULLSYNC);
+#ifdef _MSC_VER
+   //int ret = fcntl(g.outd, F_FULLFSYNC);
+   int ret = fsync(g.outd);
 #else
+
+ #ifdef F_FULLSYNC
+    int ret = fcntl(g.outd, F_FULLSYNC);
+ #else
     int ret = fsync(g.outd);
+ #endif
 #endif
     if (ret == -1)
         throw(errno, "sync error on %s (%s)", g.outf, strerror(errno));
