@@ -24,7 +24,7 @@ Alternatively, you can build for [zlib-ng](https://github.com/zlib-ng/zlib-ng):
 git clone https://github.com/neurolabusc/pigz.git
 cd pigz
 mkdir build && cd build
--DZLIB_IMPLEMENTATION=ng ..
+cmake  -DZLIB_IMPLEMENTATION=ng ..
 make
 ```
 
@@ -35,7 +35,7 @@ Finally, you can build for your system zlib, which will likely provide the poore
 git clone https://github.com/neurolabusc/pigz.git
 cd pigz
 mkdir build && cd build
--DZLIB_IMPLEMENTATION=System ..
+cmake -DZLIB_IMPLEMENTATION=System ..
 make
 ```
 
