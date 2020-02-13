@@ -24,10 +24,19 @@ Alternatively, you can build for [zlib-ng](https://github.com/zlib-ng/zlib-ng):
 git clone https://github.com/neurolabusc/pigz.git
 cd pigz
 mkdir build && cd build
--DZLIB_IMPLEMENTATION=ng ..
+cmake  -DZLIB_IMPLEMENTATION=ng ..
 make
 ```
 
+On the other hand, you can build for [ZLIB with Intel Integrated Performance Primitives](https://software.intel.com/en-us/articles/how-to-use-zlib-with-intel-ipp-optimization):
+
+```
+git clone https://github.com/neurolabusc/pigz.git
+cd pigz
+mkdir build && cd build
+cmake  -DZLIB_IMPLEMENTATION=Intel ..
+make
+```
 
 Finally, you can build for your system zlib, which will likely provide the poorest performance:
 
@@ -35,7 +44,7 @@ Finally, you can build for your system zlib, which will likely provide the poore
 git clone https://github.com/neurolabusc/pigz.git
 cd pigz
 mkdir build && cd build
--DZLIB_IMPLEMENTATION=System ..
+cmake -DZLIB_IMPLEMENTATION=System ..
 make
 ```
 
