@@ -322,6 +322,9 @@
  */
 
 #if defined(_MSC_VER)
+//#include <wchar.h>
+//#include <mbstring.h>
+#pragma execution_character_set("utf-8") 
 //#include <cstdint>
 #include <BaseTsd.h>
 //#include <winbase.h>
@@ -395,10 +398,80 @@ typedef SSIZE_T ssize_t;
 #endif
 
 #ifdef _MSC_VER
+
+//https://www.nu42.com/2017/02/unicode-windows-command-line.html
+//https://raw.githubusercontent.com/gypified/libmp3lame/master/frontend/main.c
+static wchar_t *mbsToUnicode(const char *mbstr, int code_page) {
+    int n = MultiByteToWideChar(code_page, 0, mbstr, -1, NULL, 0);
+    wchar_t* wstr = malloc( n*sizeof(wstr[0]) );
+    if ( wstr !=0 ) {
+        n = MultiByteToWideChar(code_page, 0, mbstr, -1, wstr, n);
+        if ( n==0 ) {
+            free( wstr );
+            wstr = 0;
+        }
+    }
+    return wstr;
+}
+
+static char *unicodeToMbs(const wchar_t *wstr, int code_page) {
+    int n = 1+WideCharToMultiByte(code_page, 0, wstr, -1, 0, 0, 0, 0);
+    char* mbstr = malloc( n*sizeof(mbstr[0]) );
+    if ( mbstr !=0 ) {
+        n = WideCharToMultiByte(code_page, 0, wstr, -1, mbstr, n, 0, 0);
+        if( n == 0 ){
+            free( mbstr );
+            mbstr = 0;
+        }
+    }
+    return mbstr;
+}
+
+wchar_t *utf8ToUnicode(const char *mbstr) {
+    return mbsToUnicode(mbstr, CP_UTF8);
+}
+
+char *unicodeToUtf8(const wchar_t *wstr) {
+    return unicodeToMbs(wstr, CP_UTF8);
+}
+
 #  define chown(p,o,g) 0
 #  define utimes(p,t)  0
-#  define lstat(p,s)   stat(p,s)
 #  define _exit(s)     exit(s)
+
+int lstat(const char *path, struct stat *buf){
+    //https://mail.gnome.org/archives/gtk-devel-list/2011-September/msg00177.html
+    wchar_t *wstr = utf8ToUnicode(path);
+    int rc = _wstat(wstr, buf);
+    #ifdef PIGZ_DEBUG
+    printf("lstat(%s)=%d\n", path, rc );
+    #endif
+    free(wstr);
+    return rc;
+}
+
+int openUTF8(const char *path, int flags, int mode) {
+    wchar_t *wstr = utf8ToUnicode(path);
+    int rc = _wopen(wstr, flags, mode);
+    #ifdef PIGZ_DEBUG
+    printf("openUTF8(%s, %d, %d)=%d\n", path, flags, mode, rc );
+    #endif
+    free(wstr);
+    return rc;
+}
+
+int unlinkUTF8(const char *path) {
+    wchar_t *wstr = utf8ToUnicode(path);
+    int rc = _wunlink(wstr);
+    #ifdef PIGZ_DEBUG
+    printf("unlinkUTF8(%s)=%d\n", path, rc );
+    #endif
+    free(wstr);
+    return rc;
+}
+#else
+#  define openUTF8(p,f,m)   open(p,f,m)
+#  define unlinkUTF8(p)   unlink(p)
 #endif
 
 #ifdef __MINGW32__
@@ -868,7 +941,7 @@ local void cut_short(int sig) {
         Trace(("termination by user"));
     }
     if (g.outd != -1 && g.outd != 1) {
-        unlink(g.outf);
+        unlinkUTF8(g.outf);
         RELEASE(g.outf);
         g.outd = -1;
     }
@@ -3870,7 +3943,7 @@ local void process(char *path) {
         }
 
         // open input file
-        g.ind = open(g.inf, O_RDONLY, 0);
+        g.ind = openUTF8(g.inf, O_RDONLY, 0);
         if (g.ind < 0)
             throw(errno, "read error on %s (%s)", g.inf, strerror(errno));
 
@@ -3964,7 +4037,7 @@ local void process(char *path) {
         memcpy(g.outf, g.inf, pre);
         memcpy(g.outf + pre, to, len);
         strcpy(g.outf + pre + len, sufx);
-        g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY |
+        g.outd = openUTF8(g.outf, O_CREAT | O_TRUNC | O_WRONLY |
                               (g.force ? 0 : O_EXCL), 0600);
 
         // if exists and not -f, give user a chance to overwrite
@@ -3980,7 +4053,7 @@ local void process(char *path) {
                     reply = ch == 'y' || ch == 'Y' ? 1 : 0;
             } while (ch != EOF && ch != '\n' && ch != '\r');
             if (reply == 1)
-                g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY,
+                g.outd = openUTF8(g.outf, O_CREAT | O_TRUNC | O_WRONLY,
                               0600);
         }
 
@@ -4019,7 +4092,7 @@ local void process(char *path) {
             if (g.outd != -1 && g.outd != 1) {
                 close(g.outd);
                 g.outd = -1;
-                unlink(g.outf);
+                unlinkUTF8(g.outf);
                 RELEASE(g.outf);
             }
         }
@@ -4046,7 +4119,7 @@ local void process(char *path) {
         if (g.ind != 0) {
             copymeta(g.inf, g.outf);
             if (!g.keep)
-                unlink(g.inf);
+                unlinkUTF8(g.inf);
         }
         if (g.decode && (g.headis & 2) != 0 && g.stamp)
             touch(g.outf, g.stamp);
@@ -4396,7 +4469,11 @@ local void cut_yarn(int err) {
 #endif
 
 // Process command line arguments.
+#ifndef _MSC_VER
 int main(int argc, char **argv) {
+#else
+int c_main(int argc, char *argv[]) {
+#endif
     int n;                          // general index
     int nop;                        // index before which "-" means stdin
     int done;                       // number of named files processed
@@ -4536,3 +4613,19 @@ int main(int argc, char **argv) {
     log_dump();
     return g.ret;
 }
+
+#ifdef _MSC_VER
+int wmain(int argc, wchar_t* argv[]) { //convert each argument to UTF8
+    char **utf8_argv;
+    int ret;
+    utf8_argv = calloc(argc, sizeof(char*));
+    for (int i = 0; i < argc; ++i)
+        utf8_argv[i] = unicodeToUtf8(argv[i]);
+    SetConsoleOutputCP(CP_UTF8);
+    ret = c_main(argc, utf8_argv);
+    for (int i = 0; i < argc; ++i)
+        free( utf8_argv[i] );
+    free( utf8_argv );
+    return ret;
+}
+#endif
