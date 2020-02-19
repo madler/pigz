@@ -45,6 +45,8 @@ elseif(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4819")   # The file contains a character that cannot be represented in the current code page
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4996")   # 'access': The POSIX name for this item is deprecated
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:8388608")  # set "Stack Reserve Size" to 8MB (default value is 1MB)
+	include_directories(${CMAKE_SOURCE_DIR}/win/dirent)
+	include_directories(${CMAKE_SOURCE_DIR}/win/thread)
 endif()
 
 # Compiler dependent flags
@@ -74,11 +76,14 @@ set(PIGZ_SRCS
 
 add_executable(${PROJECT_NAME} ${PIGZ_SRCS})
 
-target_link_libraries(${PROJECT_NAME} m)
-
+if(MSVC)
+	message(STATUS "Add support for MSVC pthreads here")
+else()
+	target_link_libraries(${PROJECT_NAME} m)
+	find_package(Threads REQUIRED)
+	target_link_libraries(${PROJECT_NAME} Threads::Threads)
+endif()
 set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
-target_link_libraries(${PROJECT_NAME} Threads::Threads)
 
 set(ZLIB_IMPLEMENTATION "System" CACHE STRING "Choose zlib implementation.")
 set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "System;Custom")
