@@ -352,6 +352,19 @@ typedef SSIZE_T ssize_t;
 #include <sys/types.h>  // ssize_t
 #include <sys/stat.h>   // chmod(), stat(), fstat(), lstat(), struct stat,
                         // S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
+#ifdef __MINGW32__
+ #include <unistd.h>     
+ #include <windows.h>
+ #include <tchar.h>
+ #ifndef _UNICODE
+ #define _UNICODE
+ #endif
+ #ifndef UNICODE
+ #define UNICODE
+ #endif
+ #include <wchar.h>
+#endif
+
 #ifndef _MSC_VER
   #include <sys/time.h>   // utimes(), gettimeofday(), struct timeval
   #include <unistd.h>     // unlink(), _exit(), read(), write(), close(),
@@ -397,7 +410,7 @@ typedef SSIZE_T ssize_t;
 #  define S_IFLNK 0
 #endif
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__) 
 
 //https://www.nu42.com/2017/02/unicode-windows-command-line.html
 //https://raw.githubusercontent.com/gypified/libmp3lame/master/frontend/main.c
@@ -477,9 +490,17 @@ int unlinkUTF8(const char *path) {
 #ifdef __MINGW32__
 #  define chown(p,o,g) 0
 #  define utimes(p,t)  0
-#  define lstat(p,s)   stat(p,s)
+#if defined(__MINGW64__) 
+ //lstat defined for unicode
+#else
+ #  define lstat(p,s)   stat(p,s)
+#endif
 #  define _exit(s)     exit(s)
 #endif
+
+
+
+
 
 #include "zlib.h"       // deflateInit2(), deflateReset(), deflate(),
                         // deflateEnd(), deflateSetDictionary(), crc32(),
@@ -3726,7 +3747,8 @@ local void touch(char *path, time_t t) {
 
 
 
-#ifdef _MSC_VER
+//#ifdef 
+#if defined(_MSC_VER) || defined(MSDOS) || defined(OS2) || defined(WIN32) || defined(__CYGWIN__)
 /* http://ab-initio.mit.edu/octave-Faddeeva/gnulib/lib/fsync.c
    Emulate fsync on platforms that lack it, primarily Windows and
    cross-compilers like MinGW.
@@ -4469,10 +4491,10 @@ local void cut_yarn(int err) {
 #endif
 
 // Process command line arguments.
-#ifndef _MSC_VER
-int main(int argc, char **argv) {
-#else
+#if defined(_MSC_VER) || defined(__MINGW64__)
 int c_main(int argc, char *argv[]) {
+#else
+int main(int argc, char **argv) {
 #endif
     int n;                          // general index
     int nop;                        // index before which "-" means stdin
@@ -4614,7 +4636,10 @@ int c_main(int argc, char *argv[]) {
     return g.ret;
 }
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__)  
+// beware, only some versions of MinGW support wmain and -municode linker flag
+// use this version: http://mingw-w64.org/doku.php
+// for details: https://sourceforge.net/p/mingw-w64/wiki2/Unicode%20apps/
 int wmain(int argc, wchar_t* argv[]) { //convert each argument to UTF8
     char **utf8_argv;
     int ret;
