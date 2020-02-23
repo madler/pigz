@@ -1,4 +1,4 @@
-set(PTHREADS4W_TAG cmake)
+set(PTHREADS4W_TAG cmakebuild)
 
 set(CLEANUP_STYLE VC)
 set(PTW32_VER 3)
