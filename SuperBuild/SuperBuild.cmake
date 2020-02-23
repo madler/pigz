@@ -40,12 +40,19 @@ include(ExternalProject)
 
 set(DEPENDENCIES)
 
-option(INSTALL_DEPENDENCIES "Optionally install built dependent libraries (OpenJPEG and yaml-cpp) for future use." OFF)
+option(INSTALL_DEPENDENCIES "Optionally install built dependent libraries for future use." OFF)
 
 if(INSTALL_DEPENDENCIES)
     set(DEP_INSTALL_DIR ${CMAKE_INSTALL_PREFIX})
 else()
     set(DEP_INSTALL_DIR ${CMAKE_BINARY_DIR})
+endif()
+
+if(MSVC)
+    message("-- Use pthreads4w for MSVC")
+    message("--   Will build pthreads4w from github")
+    include(${CMAKE_SOURCE_DIR}/SuperBuild/External-PTHREADS4W.cmake)
+    list(APPEND DEPENDENCIES pthreads4w)
 endif()
 
 set(ZLIB_IMPLEMENTATION "Cloudflare" CACHE STRING "Choose zlib implementation.")
@@ -81,22 +88,30 @@ elseif(${ZLIB_IMPLEMENTATION} STREQUAL "Custom")
     endif()
 endif()
 
+set(CMAKE_ARGS
+    -Wno-dev
+    --no-warn-unused-cli
+    -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
+    -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_BINARY_DIR}
+    -DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS}
+    -DCMAKE_CXX_FLAGS:STRING=${CMAKE_CXX_FLAGS}
+    -DCMAKE_VERBOSE_MAKEFILE:BOOL=${CMAKE_VERBOSE_MAKEFILE}
+    -DUSE_STATIC_RUNTIME:BOOL=${USE_STATIC_RUNTIME}
+    -DZLIB_IMPLEMENTATION:STRING=${ZLIB_IMPLEMENTATION}
+    -DZLIB_ROOT:PATH=${ZLIB_ROOT})
+
+if(MSVC)
+    list(APPEND CMAKE_ARGS
+        -DPTHREADS4W_INCLUDE_DIRS:PATH=${PTHREADS4W_INCLUDE_DIRS}
+        -DPTHREADS4W_LIBRARIES:STRING=${PTHREADS4W_LIBRARIES})
+endif()
+
 ExternalProject_Add(pigz
     DEPENDS ${DEPENDENCIES}
     DOWNLOAD_COMMAND ""
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/src
     BINARY_DIR pigz-build
-    CMAKE_ARGS
-        -Wno-dev
-        --no-warn-unused-cli
-        -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
-        -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_BINARY_DIR}
-        -DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS}
-        -DCMAKE_CXX_FLAGS:STRING=${CMAKE_CXX_FLAGS}
-        -DCMAKE_VERBOSE_MAKEFILE:BOOL=${CMAKE_VERBOSE_MAKEFILE}
-        -DUSE_STATIC_RUNTIME:BOOL=${USE_STATIC_RUNTIME}
-        -DZLIB_IMPLEMENTATION:STRING=${ZLIB_IMPLEMENTATION}
-        -DZLIB_ROOT:PATH=${ZLIB_ROOT}
+    CMAKE_ARGS ${CMAKE_ARGS}
 )
 
 install(DIRECTORY ${CMAKE_BINARY_DIR}/bin/ DESTINATION bin
