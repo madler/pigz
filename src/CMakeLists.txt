@@ -85,6 +85,10 @@ else()
 endif()
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 
+if(MINGW)
+    set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS -municode)
+endif()
+
 set(ZLIB_IMPLEMENTATION "System" CACHE STRING "Choose zlib implementation.")
 set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "System;Custom")
 if(NOT ${ZLIB_IMPLEMENTATION} STREQUAL "System")
