@@ -1,14 +1,19 @@
 ## About
 
-The GZip format is a popular format for file compression. For example, it is widely used in Neuroimaging, for example in the NIfTI format (e.g. [FSL](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/) and [AFNI](https://afni.nimh.nih.gov)) and AFNI's BRIK format. While GZip is very fast to decompress, it is slow to create compressed files. One solution to this problem is [pigz](https://zlib.net/pigz/) which leverages the fact that modern computers have multiple cores to compress sections of your file in parallel. With pigz, a system with four cores can compress files about twice as quick. A second approach is to use [modern computer instructions](https://github.com/cloudflare/zlib) to accelerate compression. This approach leverages instructions built into modern computers since 2009. 
 
-This project combines these two approaches, building pigz using the Cloudflare accelerated zlib. This repository also includes a [CMake build script](https://github.com/madler/pigz/issues/62) to ease cross platform support (using @ningfei's superbuild scripts).
+[pigz](https://zlib.net/pigz/), which stands for parallel implementation of gzip, is a fully functional replacement for gzip that exploits multiple processors and multiple cores to the hilt when compressing data. pigz was written by [Mark Adler](https://en.wikipedia.org/wiki/Mark_Adler), and uses the [zlib](https://zlib.net) and [pthread](https://en.wikipedia.org/wiki/POSIX_Threads) libraries. To compile and use pigz, please read the README file in the source code distribution. You can read the pigz manual page [here](https://zlib.net/pigz/pigz.pdf).
 
-Be aware that some pigz does not work on some [Linux systems](https://github.com/madler/pigz/issues/68) and will generate an `internal threads error`. In my experience, most Linux distributions work fine.
+Most users can install pigz with a simple command (Debian: `sudo yum install pigz`, RedHat:  `apt-get install pigz`, MacOS: `brew install pigz`). 
 
-## Installing
+This repository provides the source code, allowing users to build their own executable. One reason to build your own copy is to improve performance (see CMake notes below). An additional reason is to ensure pigz is build with a current version of glibc. Specifically, pigz can generate an `internal threads error` on [Linux servers with old versions of glibc](https://github.com/madler/pigz/issues/68). If you see these errors you should upgrade your glibc library and recompile pigz.
 
-The recommended method is to compile your own copy of pigz. This will ensure that pigz is built using the latest [glibc](https://github.com/madler/pigz/issues/68) version on your system (which will use the [CloudFlare zlib](https://github.com/cloudflare/zlib) by default) which is currently the best performing option:
+## Compiling with Make
+
+This is the simplest way to compile pigz. Type "make" in the source directory ("pigz/src") to build the "pigz" executable.  You can then install the executable wherever you like in your path (e.g. /usr/local/bin/). Type "pigz" to see the command help and all of the command options.
+
+## Compiling with CMake
+
+Compiling with CMake is more complicated than using Make. However, it does allow you to use different variants of the zlib compression library that can [improve](https://github.com/neurolabusc/pigz-bench) performance. Compiling with CMake requires the computer to have CMake and git installed. By default, CMake will use the [CloudFlare zlib](https://github.com/cloudflare/zlib):
 
 ```
 git clone https://github.com/neurolabusc/pigz.git
@@ -24,21 +29,11 @@ Alternatively, you can build for [zlib-ng](https://github.com/zlib-ng/zlib-ng):
 git clone https://github.com/neurolabusc/pigz.git
 cd pigz
 mkdir build && cd build
-cmake  -DZLIB_IMPLEMENTATION=ng ..
+cmake -DZLIB_IMPLEMENTATION=ng ..
 make
 ```
 
-On the other hand, you can build for [ZLIB with Intel Integrated Performance Primitives](https://software.intel.com/en-us/articles/how-to-use-zlib-with-intel-ipp-optimization):
-
-```
-git clone https://github.com/neurolabusc/pigz.git
-cd pigz
-mkdir build && cd build
-cmake  -DZLIB_IMPLEMENTATION=Intel ..
-make
-```
-
-Finally, you can build for your system zlib, which will likely provide the poorest performance:
+Finally, you can build for your system zlib, which will likely provide the poorest performance (but is the most popular so least likely to have any issues):
 
 ```
 git clone https://github.com/neurolabusc/pigz.git
@@ -48,50 +43,16 @@ cmake -DZLIB_IMPLEMENTATION=System ..
 make
 ```
 
-You can get a precompiled version by going to the  [releases](https://github.com/neurolabusc/pigz/releases) tab. Different Linux versions are provided, e.g. for Ubuntu 16.04, 18.04 or 19.10. You should use the latest version supported by your system, as [glibc](https://github.com/madler/pigz/issues/68) has been improved to fix parallel threading issues.
-
-## Installation and testing
-
-Tools like afni and dcm2niix use whichever version of pigz they find in your system path. You can find the current location of pigz using `which pigz`. I would recommend backing up your prior version of pigz. If you use AFNI, remember to set up you [environment](https://afni.nimh.nih.gov/pub/dist/doc/program_help/README.environment.html) to use pigz.
-
-Here is the performance on a 4-core (8-thread) MacOS laptop. It takes just under 4 seconds to filter this image without compression, just over seven seconds with the default pigz, and just over six with the optimized pigz - the compression time is accelerated 37%. 
-```
->time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.nii rest.nii 
-...
-real	0m3.859s
->time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.brik.gz rest.nii 
-....
-real	0m7.264s
->rm afni.brik.gz+orig.*
->which pigz
-/usr/local/bin/pigz
->sudo cp /usr/local/bin/pigz /usr/local/bin/pigz_old
->sudo cp ./pigz /usr/local/bin/pigz
->time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.brik.gz rest.nii 
-....
-real	0m6.343s
-```
-
-
-Here is the performance on a 12-core (24-thread) Linux computer. This shows a 40% acceleration.
+Note that the process is a little different if you are using the Windows operating system. Windows users can compile using the [Microsoft C Compiler](https://visualstudio.microsoft.com/downloads/) or [MinGW](  http://mingw-w64.org/doku.php). Be aware there are several variations of the MinGW compiler, and the CMake script expects a version that supports the [-municode linker flag]( https://sourceforge.net/p/mingw-w64/wiki2/Unicode%20apps/). This flag is required to handle non-Latin letters in filenames. Here is an example of compiling on Windows targeting the Cloudflare zlib:
 
 ```
->time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.nii rest.nii 
-...
-real	0m1.679s
->time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.brik.gz rest.nii 
-...
-real	0m3.094s
-> rm afni.brik.gz+orig.*
->which pigz
-/usr/local/bin/pigz
->sudo cp /usr/bin/pigz /usr/bin/pigz_old
->sudo cp ./pigz /usr/bin/pigz
->time 3dmerge -1blur_fwhm 6.0 -doall -prefix afni.brik.gz rest.nii 
-...
-real	0m2.691s
+git clone https://github.com/neurolabusc/pigz.git
+cd pigz
+mkdir build
+cd build
+cmake  -DZLIB_IMPLEMENTATION=Cloudflare ..
+cmake --build . --config Release
 ```
-
 
 
 ## Details
@@ -104,7 +65,7 @@ pigz was written by Mark Adler and does not include third-party code. I am makin
 
 This version of pigz is written to be portable across Unix-style operating systems that provide the zlib and pthread libraries.
 
-Type "make" in this directory to build the "pigz" executable.  You can then install the executable wherever you like in your path (e.g. /usr/local/bin/). Type "pigz" to see the command help and all of the command options.
+Type "make" in the source directory ("pigz/src") to build the "pigz" executable.  You can then install the executable wherever you like in your path (e.g. /usr/local/bin/). Type "pigz" to see the command help and all of the command options.
 
 The latest version of pigz can be found at http://zlib.net/pigz/ .  You need zlib version 1.2.3 or later to compile pigz.  zlib version 1.2.6 or later is recommended, which reduces the overhead between blocks.  You can find the latest version of zlib at http://zlib.net/.  You can look in pigz.c for the change history.
 
