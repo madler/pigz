@@ -1,7 +1,7 @@
 set(CLOUDFLARE_BRANCH gcc.amd64) # Cloudflare zlib branch
 
 ExternalProject_Add(zlib
-    GIT_REPOSITORY "${git_protocol}://github.com/rordenlab/zlib.git"
+    GIT_REPOSITORY "${git_protocol}://github.com/ningfei/zlib.git"
     GIT_TAG "${CLOUDFLARE_BRANCH}"
     SOURCE_DIR cloudflare-zlib
     BINARY_DIR cloudflare-zlib-build

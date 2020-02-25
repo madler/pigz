@@ -45,8 +45,7 @@ elseif(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4819")   # The file contains a character that cannot be represented in the current code page
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4996")   # 'access': The POSIX name for this item is deprecated
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:8388608")  # set "Stack Reserve Size" to 8MB (default value is 1MB)
-	include_directories(${CMAKE_SOURCE_DIR}/win/dirent)
-	include_directories(${CMAKE_SOURCE_DIR}/win/thread)
+    include_directories(${CMAKE_SOURCE_DIR}/win/dirent)
 endif()
 
 # Compiler dependent flags
@@ -61,29 +60,38 @@ endif()
 set(PROGRAMS ${PROJECT_NAME})
 
 set(PIGZ_SRCS
-	pigz.c
-	yarn.c
-	try.c
-	zopfli/src/zopfli/deflate.c
-	zopfli/src/zopfli/blocksplitter.c
-	zopfli/src/zopfli/tree.c
-	zopfli/src/zopfli/lz77.c
-	zopfli/src/zopfli/cache.c
-	zopfli/src/zopfli/hash.c
-	zopfli/src/zopfli/util.c
-	zopfli/src/zopfli/squeeze.c
-	zopfli/src/zopfli/katajainen.c)
+    pigz.c
+    yarn.c
+    try.c
+    zopfli/src/zopfli/deflate.c
+    zopfli/src/zopfli/blocksplitter.c
+    zopfli/src/zopfli/tree.c
+    zopfli/src/zopfli/lz77.c
+    zopfli/src/zopfli/cache.c
+    zopfli/src/zopfli/hash.c
+    zopfli/src/zopfli/util.c
+    zopfli/src/zopfli/squeeze.c
+    zopfli/src/zopfli/katajainen.c)
 
 add_executable(${PROJECT_NAME} ${PIGZ_SRCS})
 
 if(MSVC)
-	message(STATUS "Add support for MSVC pthreads here")
+    target_include_directories(${PROJECT_NAME} PRIVATE ${PTHREADS4W_INCLUDE_DIRS})
+    target_link_libraries(${PROJECT_NAME} ${PTHREADS4W_LIBRARIES})
 else()
-	target_link_libraries(${PROJECT_NAME} m)
-	find_package(Threads REQUIRED)
-	target_link_libraries(${PROJECT_NAME} Threads::Threads)
+    target_link_libraries(${PROJECT_NAME} m)
+    if(MINGW)
+        target_link_libraries(${PROJECT_NAME} "-Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
+    else()
+        find_package(Threads REQUIRED)
+        target_link_libraries(${PROJECT_NAME} Threads::Threads)
+    endif()
 endif()
 set(THREADS_PREFER_PTHREAD_FLAG ON)
+
+if(MINGW)
+    set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS -municode)
+endif()
 
 set(ZLIB_IMPLEMENTATION "System" CACHE STRING "Choose zlib implementation.")
 set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "System;Custom")
