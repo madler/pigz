@@ -13,47 +13,46 @@ This is the simplest way to compile pigz. Type "make" in the source directory ("
 
 ## Compiling with CMake
 
-Compiling with CMake is more complicated than using Make. However, it does allow you to use different variants of the zlib compression library that can [improve](https://github.com/neurolabusc/pigz-bench) performance. Compiling with CMake requires the computer to have CMake and git installed. By default, CMake will use the [CloudFlare zlib](https://github.com/cloudflare/zlib):
+Compiling with CMake is more complicated than using Make. However, it does allow you to use different variants of the zlib compression library that can [improve](https://github.com/neurolabusc/pigz-bench) performance. Compiling with CMake requires the computer to have CMake and git installed. By default, CMake will use the [CloudFlare zlib](https://github.com/cloudflare/zlib) which provides outstanding compression performance:
 
 ```
-git clone https://github.com/neurolabusc/pigz.git
+git clone https://github.com/madler/pigz
 cd pigz
 mkdir build && cd build
 cmake ..
 make
 ```
 
-Alternatively, you can build for [zlib-ng](https://github.com/zlib-ng/zlib-ng):
+Alternatively, you can build for your system zlib, which will likely provide the poorest performance (but is the most popular so least likely to have any issues):
 
 ```
-git clone https://github.com/neurolabusc/pigz.git
-cd pigz
-mkdir build && cd build
-cmake -DZLIB_IMPLEMENTATION=ng ..
-make
-```
-
-Finally, you can build for your system zlib, which will likely provide the poorest performance (but is the most popular so least likely to have any issues):
-
-```
-git clone https://github.com/neurolabusc/pigz.git
+git clone https://github.com/madler/pigz
 cd pigz
 mkdir build && cd build
 cmake -DZLIB_IMPLEMENTATION=System ..
 make
 ```
 
+Finally, you can build for [zlib-ng](https://github.com/zlib-ng/zlib-ng). At the moment this provides compression performance between CloudFlare and System, but provides exceptionally fast decompression:
+
+```
+git clone https://github.com/madler/pigz
+cd pigz
+mkdir build && cd build
+cmake -DZLIB_IMPLEMENTATION=ng ..
+make
+```
+
 Note that the process is a little different if you are using the Windows operating system. Windows users can compile using the [Microsoft C Compiler](https://visualstudio.microsoft.com/downloads/) or [MinGW](  http://mingw-w64.org/doku.php). Be aware there are several variations of the MinGW compiler, and the CMake script expects a version that supports the [-municode linker flag]( https://sourceforge.net/p/mingw-w64/wiki2/Unicode%20apps/). This flag is required to handle non-Latin letters in filenames. Here is an example of compiling on Windows targeting the Cloudflare zlib:
 
 ```
-git clone https://github.com/neurolabusc/pigz.git
+git clone https://github.com/madler/pigz
 cd pigz
 mkdir build
 cd build
 cmake  -DZLIB_IMPLEMENTATION=Cloudflare ..
 cmake --build . --config Release
 ```
-
 
 ## Details
 
