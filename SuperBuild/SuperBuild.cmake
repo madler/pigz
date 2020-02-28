@@ -56,7 +56,7 @@ if(MSVC)
 endif()
 
 set(ZLIB_IMPLEMENTATION "Cloudflare" CACHE STRING "Choose zlib implementation.")
-set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "Cloudflare;Chromium;System;Intel;ng;Custom")
+set_property(CACHE ZLIB_IMPLEMENTATION PROPERTY STRINGS  "Cloudflare;System;ng;Custom")
 if(${ZLIB_IMPLEMENTATION} STREQUAL "Cloudflare")
     message("-- Build with Cloudflare zlib: ON")
     include(${CMAKE_SOURCE_DIR}/SuperBuild/External-CLOUDFLARE-ZLIB.cmake)
