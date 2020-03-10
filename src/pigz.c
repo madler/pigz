@@ -321,6 +321,17 @@
    buffers to about the same number.
  */
 
+#if defined(_MSC_VER)
+//#include <wchar.h>
+//#include <mbstring.h>
+#pragma execution_character_set("utf-8") 
+//#include <cstdint>
+#include <BaseTsd.h>
+//#include <winbase.h>
+typedef unsigned short uint_least16_t;
+typedef SSIZE_T ssize_t;
+#endif
+
 // Use large file functions if available.
 #define _FILE_OFFSET_BITS 64
 
@@ -341,13 +352,32 @@
 #include <sys/types.h>  // ssize_t
 #include <sys/stat.h>   // chmod(), stat(), fstat(), lstat(), struct stat,
                         // S_IFDIR, S_IFLNK, S_IFMT, S_IFREG
-#include <sys/time.h>   // utimes(), gettimeofday(), struct timeval
-#include <unistd.h>     // unlink(), _exit(), read(), write(), close(),
-                        // lseek(), isatty(), chown(), fsync()
-#include <fcntl.h>      // open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
-                        // O_WRONLY, fcntl(), F_FULLFSYNC
+#ifdef __MINGW32__
+ #include <unistd.h>     
+ #include <windows.h>
+ #include <tchar.h>
+ #ifndef _UNICODE
+ #define _UNICODE
+ #endif
+ #ifndef UNICODE
+ #define UNICODE
+ #endif
+ #include <wchar.h>
+#endif
+
+#ifndef _MSC_VER
+  #include <sys/time.h>   // utimes(), gettimeofday(), struct timeval
+  #include <unistd.h>     // unlink(), _exit(), read(), write(), close(),
+                          // lseek(), isatty(), chown(), fsync()
+
+#else
+ #include <winsock2.h>
+ #include <pthread.h>
+#endif
 #include <dirent.h>     // opendir(), readdir(), closedir(), DIR,
                         // struct dirent
+#include <fcntl.h>      // open(), O_CREAT, O_EXCL, O_RDONLY, O_TRUNC,
+                        // O_WRONLY, fcntl(), F_FULLFSYNC
 #include <limits.h>     // UINT_MAX, INT_MAX
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #  include <inttypes.h> // intmax_t, uintmax_t
@@ -380,12 +410,97 @@
 #  define S_IFLNK 0
 #endif
 
+#if defined(_MSC_VER) || defined(__MINGW64__) 
+
+//https://www.nu42.com/2017/02/unicode-windows-command-line.html
+//https://raw.githubusercontent.com/gypified/libmp3lame/master/frontend/main.c
+static wchar_t *mbsToUnicode(const char *mbstr, int code_page) {
+    int n = MultiByteToWideChar(code_page, 0, mbstr, -1, NULL, 0);
+    wchar_t* wstr = malloc( n*sizeof(wstr[0]) );
+    if ( wstr !=0 ) {
+        n = MultiByteToWideChar(code_page, 0, mbstr, -1, wstr, n);
+        if ( n==0 ) {
+            free( wstr );
+            wstr = 0;
+        }
+    }
+    return wstr;
+}
+
+static char *unicodeToMbs(const wchar_t *wstr, int code_page) {
+    int n = 1+WideCharToMultiByte(code_page, 0, wstr, -1, 0, 0, 0, 0);
+    char* mbstr = malloc( n*sizeof(mbstr[0]) );
+    if ( mbstr !=0 ) {
+        n = WideCharToMultiByte(code_page, 0, wstr, -1, mbstr, n, 0, 0);
+        if( n == 0 ){
+            free( mbstr );
+            mbstr = 0;
+        }
+    }
+    return mbstr;
+}
+
+wchar_t *utf8ToUnicode(const char *mbstr) {
+    return mbsToUnicode(mbstr, CP_UTF8);
+}
+
+char *unicodeToUtf8(const wchar_t *wstr) {
+    return unicodeToMbs(wstr, CP_UTF8);
+}
+
+#  define chown(p,o,g) 0
+#  define utimes(p,t)  0
+#  define _exit(s)     exit(s)
+
+int lstat(const char *path, struct stat *buf){
+    //https://mail.gnome.org/archives/gtk-devel-list/2011-September/msg00177.html
+    wchar_t *wstr = utf8ToUnicode(path);
+    int rc = _wstat(wstr, buf);
+    #ifdef PIGZ_DEBUG
+    printf("lstat(%s)=%d\n", path, rc );
+    #endif
+    free(wstr);
+    return rc;
+}
+
+int openUTF8(const char *path, int flags, int mode) {
+    wchar_t *wstr = utf8ToUnicode(path);
+    int rc = _wopen(wstr, flags, mode);
+    #ifdef PIGZ_DEBUG
+    printf("openUTF8(%s, %d, %d)=%d\n", path, flags, mode, rc );
+    #endif
+    free(wstr);
+    return rc;
+}
+
+int unlinkUTF8(const char *path) {
+    wchar_t *wstr = utf8ToUnicode(path);
+    int rc = _wunlink(wstr);
+    #ifdef PIGZ_DEBUG
+    printf("unlinkUTF8(%s)=%d\n", path, rc );
+    #endif
+    free(wstr);
+    return rc;
+}
+#else
+#  define openUTF8(p,f,m)   open(p,f,m)
+#  define unlinkUTF8(p)   unlink(p)
+#endif
+
 #ifdef __MINGW32__
 #  define chown(p,o,g) 0
 #  define utimes(p,t)  0
-#  define lstat(p,s)   stat(p,s)
+#if defined(__MINGW64__) 
+ //lstat defined for unicode
+#else
+ #  define lstat(p,s)   stat(p,s)
+#endif
 #  define _exit(s)     exit(s)
 #endif
+
+
+
+
 
 #include "zlib.h"       // deflateInit2(), deflateReset(), deflate(),
                         // deflateEnd(), deflateSetDictionary(), crc32(),
@@ -404,6 +519,8 @@
 #endif
 
 #ifndef NOZOPFLI
+
+
 #  include "zopfli/src/zopfli/deflate.h"    // ZopfliDeflatePart(),
                                             // ZopfliInitOptions(),
                                             // ZopfliOptions
@@ -661,7 +778,9 @@ local void zlib_free(voidpf opaque, voidpf address) {
 
 #define REALLOC(p, s) realloc_track(&mem_track, p, s)
 #define FREE(p) free_track(&mem_track, p)
-#define OPAQUE (&mem_track)
+#define OPAQUEz (&mem_track)
+
+
 #define ZALLOC zlib_alloc
 #define ZFREE zlib_free
 
@@ -669,7 +788,7 @@ local void zlib_free(voidpf opaque, voidpf address) {
 
 #define REALLOC realloc
 #define FREE free
-#define OPAQUE Z_NULL
+#define OPAQUEz Z_NULL
 #define ZALLOC Z_NULL
 #define ZFREE Z_NULL
 
@@ -843,7 +962,7 @@ local void cut_short(int sig) {
         Trace(("termination by user"));
     }
     if (g.outd != -1 && g.outd != 1) {
-        unlink(g.outf);
+        unlinkUTF8(g.outf);
         RELEASE(g.outf);
         g.outd = -1;
     }
@@ -1633,7 +1752,7 @@ local void compress_thread(void *dummy) {
         // initialize the deflate stream for this thread
         strm.zfree = ZFREE;
         strm.zalloc = ZALLOC;
-        strm.opaque = OPAQUE;
+        strm.opaque = OPAQUEz;
         ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
@@ -2221,7 +2340,7 @@ local void single_compress(int reset) {
         strm = alloc(NULL, sizeof(z_stream));
         strm->zfree = ZFREE;
         strm->zalloc = ZALLOC;
-        strm->opaque = OPAQUE;
+        strm->opaque = OPAQUEz;
         ret = deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
@@ -3257,7 +3376,7 @@ local void infchk(void) {
         g.out_check = CHECK(0L, Z_NULL, 0);
         strm.zalloc = ZALLOC;
         strm.zfree = ZFREE;
-        strm.opaque = OPAQUE;
+        strm.opaque = OPAQUEz;
         ret = inflateBackInit(&strm, 15, out_buf);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
@@ -3626,6 +3745,73 @@ local void touch(char *path, time_t t) {
     (void)utimes(path, times);
 }
 
+
+
+//#ifdef 
+#if defined(_MSC_VER) || defined(MSDOS) || defined(OS2) || defined(WIN32) || defined(__CYGWIN__)
+/* http://ab-initio.mit.edu/octave-Faddeeva/gnulib/lib/fsync.c
+   Emulate fsync on platforms that lack it, primarily Windows and
+   cross-compilers like MinGW.
+
+   This is derived from sqlite3 sources.
+   http://www.sqlite.org/cvstrac/rlog?f=sqlite/src/os_win.c
+   http://www.sqlite.org/copyright.html
+
+   Written by Richard W.M. Jones <rjones.at.redhat.com>
+
+   Copyright (C) 2008-2012 Free Software Foundation, Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public
+   License as published by the Free Software Foundation; either
+   version 2.1 of the License, or (at your option) any later version.
+
+   This library is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+int fsync (int fd) {
+  HANDLE h = (HANDLE) _get_osfhandle (fd);
+  DWORD err;
+
+  if (h == INVALID_HANDLE_VALUE)
+    {
+      errno = EBADF;
+      return -1;
+    }
+
+  if (!FlushFileBuffers (h))
+    {
+      /* Translate some Windows errors into rough approximations of Unix
+       * errors.  MSDN is useless as usual - in this case it doesn't
+       * document the full range of errors.
+       */
+      err = GetLastError ();
+      switch (err)
+        {
+        case ERROR_ACCESS_DENIED:
+          /* For a read-only handle, fsync should succeed, even though we have
+             no way to sync the access-time changes.  */
+          return 0;
+
+          /* eg. Trying to fsync a tty. */
+        case ERROR_INVALID_HANDLE:
+          errno = EINVAL;
+          break;
+
+        default:
+          errno = EIO;
+        }
+      return -1;
+    }
+
+  return 0;
+}
+#endif /* !Windows */
+
 // Request that all data buffered by the operating system for g.outd be written
 // to the permanent storage device. If fsync(fd) is used (POSIX), then all of
 // the data is sent to the device, but will likely be buffered in volatile
@@ -3640,10 +3826,16 @@ local void touch(char *path, time_t t) {
 local void out_push(void) {
     if (g.outd == -1)
         return;
-#ifdef F_FULLSYNC
-    int ret = fcntl(g.outd, F_FULLSYNC);
+#ifdef _MSC_VER
+   //int ret = fcntl(g.outd, F_FULLFSYNC);
+   int ret = fsync(g.outd);
 #else
+
+ #ifdef F_FULLSYNC
+    int ret = fcntl(g.outd, F_FULLSYNC);
+ #else
     int ret = fsync(g.outd);
+ #endif
 #endif
     if (ret == -1)
         throw(errno, "sync error on %s (%s)", g.outf, strerror(errno));
@@ -3773,7 +3965,7 @@ local void process(char *path) {
         }
 
         // open input file
-        g.ind = open(g.inf, O_RDONLY, 0);
+        g.ind = openUTF8(g.inf, O_RDONLY, 0);
         if (g.ind < 0)
             throw(errno, "read error on %s (%s)", g.inf, strerror(errno));
 
@@ -3867,7 +4059,7 @@ local void process(char *path) {
         memcpy(g.outf, g.inf, pre);
         memcpy(g.outf + pre, to, len);
         strcpy(g.outf + pre + len, sufx);
-        g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY |
+        g.outd = openUTF8(g.outf, O_CREAT | O_TRUNC | O_WRONLY |
                               (g.force ? 0 : O_EXCL), 0600);
 
         // if exists and not -f, give user a chance to overwrite
@@ -3883,7 +4075,7 @@ local void process(char *path) {
                     reply = ch == 'y' || ch == 'Y' ? 1 : 0;
             } while (ch != EOF && ch != '\n' && ch != '\r');
             if (reply == 1)
-                g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY,
+                g.outd = openUTF8(g.outf, O_CREAT | O_TRUNC | O_WRONLY,
                               0600);
         }
 
@@ -3922,7 +4114,7 @@ local void process(char *path) {
             if (g.outd != -1 && g.outd != 1) {
                 close(g.outd);
                 g.outd = -1;
-                unlink(g.outf);
+                unlinkUTF8(g.outf);
                 RELEASE(g.outf);
             }
         }
@@ -3949,7 +4141,7 @@ local void process(char *path) {
         if (g.ind != 0) {
             copymeta(g.inf, g.outf);
             if (!g.keep)
-                unlink(g.inf);
+                unlinkUTF8(g.inf);
         }
         if (g.decode && (g.headis & 2) != 0 && g.stamp)
             touch(g.outf, g.stamp);
@@ -4299,7 +4491,11 @@ local void cut_yarn(int err) {
 #endif
 
 // Process command line arguments.
+#if defined(_MSC_VER) || defined(__MINGW64__)
+int c_main(int argc, char *argv[]) {
+#else
 int main(int argc, char **argv) {
+#endif
     int n;                          // general index
     int nop;                        // index before which "-" means stdin
     int done;                       // number of named files processed
@@ -4439,3 +4635,22 @@ int main(int argc, char **argv) {
     log_dump();
     return g.ret;
 }
+
+#if defined(_MSC_VER) || defined(__MINGW64__)  
+// beware, only some versions of MinGW support wmain and -municode linker flag
+// use this version: http://mingw-w64.org/doku.php
+// for details: https://sourceforge.net/p/mingw-w64/wiki2/Unicode%20apps/
+int wmain(int argc, wchar_t* argv[]) { //convert each argument to UTF8
+    char **utf8_argv;
+    int ret;
+    utf8_argv = calloc(argc, sizeof(char*));
+    for (int i = 0; i < argc; ++i)
+        utf8_argv[i] = unicodeToUtf8(argv[i]);
+    SetConsoleOutputCP(CP_UTF8);
+    ret = c_main(argc, utf8_argv);
+    for (int i = 0; i < argc; ++i)
+        free( utf8_argv[i] );
+    free( utf8_argv );
+    return ret;
+}
+#endif

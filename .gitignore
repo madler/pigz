@@ -1,6 +1,9 @@
 *.o
-/pigz
-/unpigz
-/pigzj
-/pigzt
-/pigzn
+/build/
+/bin/
+/src/pigz.*
+/src/unpigz.*
+/src/pigzj.*
+/src/pigzt.*
+/src/pigzn.*
+.DS_Store
