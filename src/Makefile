@@ -1,27 +1,7 @@
 CC=gcc
 CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas
 LDFLAGS=
-UNPIGZ=ln -f pigz unpigz
-LIBS=-lm -lpthread  -I./linux ./linux/libz.a
-#LIBS=-lm -lpthread -lz
-
-ifneq ($(OS),Windows_NT)
-	OS = $(shell uname)
- 	ifeq "$(OS)" "Darwin"
-		LIBS=-lm -lpthread  -I./darwin ./darwin/libz.a	
-	endif
-else
-	ifeq ($(PROCESSOR_ARCHITEW6432),AMD64)
-        LDFLAGS= -municode
-    else
-        ifeq ($(PROCESSOR_ARCHITECTURE),AMD64)
-            LDFLAGS= -municode
-        endif
-    endif
-    LIBS=-lm -lpthread -lz
-	UNPIGZ=cp pigz.exe unpigz.exe
-endif
-
+LIBS=-lm -lpthread -lz
 ZOPFLI=zopfli/src/zopfli/
 ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o
 
@@ -29,7 +9,7 @@ ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o kata
 
 pigz: pigz.o yarn.o try.o $(ZOP)
 	$(CC) $(LDFLAGS) -o pigz pigz.o yarn.o try.o $(ZOP) $(LIBS)
-	$(UNPIGZ)
+	ln -f pigz unpigz
 
 pigz.o: pigz.c yarn.h try.h $(ZOPFLI)deflate.h $(ZOPFLI)util.h
 
