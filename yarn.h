@@ -32,7 +32,7 @@
 
    Assuming adequate system resources and proper use, none of these functions
    can fail.  As a result, any errors encountered will cause an exit() to be
-   executed.
+   executed, or the execution of your own optionally-provided abort function.
 
    These functions allow the simple launching and joining of threads, and the
    locking of objects and synchronization of changes of objects.  The latter is
