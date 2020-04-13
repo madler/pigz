@@ -261,6 +261,10 @@ local void reenter(void *arg) {
 
     // update the count of threads to be joined and alert join_all()
     twist_(&(threads_lock), BY, +1, capsule->file, capsule->line);
+
+    // free the capsule resource, even if the thread is cancelled (though yarn
+    // doesn't use pthread_cancel() -- you never know)
+    my_free(capsule);
 }
 
 // All threads go through this routine. Just before a thread exits, it marks
@@ -275,9 +279,8 @@ local void *ignition(void *arg) {
 
     // execute the requested function with argument
     capsule->probe(capsule->payload);
-    my_free(capsule);
 
-    // mark this thread as done and let join_all() know
+    // mark this thread as done, letting join_all() know, and free capsule
     pthread_cleanup_pop(1);
 
     // exit thread
