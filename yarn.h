@@ -1,6 +1,6 @@
 /* yarn.h -- generic interface for thread operations
- * Copyright (C) 2008, 2011, 2012, 2015, 2018 Mark Adler
- * Version 1.5  8 May 2018  Mark Adler
+ * Copyright (C) 2008, 2011, 2012, 2015, 2018, 2019, 2020 Mark Adler
+ * Version 1.7  12 Apr 2020  Mark Adler
  */
 
 /*

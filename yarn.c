@@ -1,6 +1,6 @@
 /* yarn.c -- generic thread operations implemented using pthread functions
- * Copyright (C) 2008, 2011, 2012, 2015, 2018, 2019 Mark Adler
- * Version 1.6  3 Apr 2019  Mark Adler
+ * Copyright (C) 2008, 2011, 2012, 2015, 2018, 2019, 2020 Mark Adler
+ * Version 1.7  12 Apr 2020  Mark Adler
  * For conditions of distribution and use, see copyright notice in yarn.h
  */
 
@@ -21,7 +21,8 @@
                        Accept and do nothing for NULL argument to free_lock()
    1.5     8 May 2018  Remove destruct() to avoid use of pthread_cancel()
                        Normalize the code style
-   1.6     3 Apr 2019  Add debugging information to fail() error messages.
+   1.6     3 Apr 2019  Add debugging information to fail() error messages
+   1.7    12 Apr 2020  Fix use after free bug in ignition()
  */
 
 // For thread portability.
