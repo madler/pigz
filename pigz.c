@@ -4065,7 +4065,8 @@ local void process(char *path) {
             // add appropriate suffix when compressing
             sufx = g.sufx;
 
-        // create output file and open to write
+        // create output file and open to write, overwriting any existing file
+        // of the same name only if requested with --force or -f
         g.outf = alloc(NULL, pre + len + strlen(sufx) + 1);
         memcpy(g.outf, g.inf, pre);
         memcpy(g.outf + pre, to, len);
@@ -4073,29 +4074,33 @@ local void process(char *path) {
         g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY |
                               (g.force ? 0 : O_EXCL), 0600);
 
-        // if exists and not -f, give user a chance to overwrite
-        if (g.outd < 0 && errno == EEXIST && isatty(0) && g.verbosity) {
-            int ch, reply;
-
-            fprintf(stderr, "%s exists -- overwrite (y/n)? ", g.outf);
-            fflush(stderr);
-            reply = -1;
-            do {
-                ch = getchar();
-                if (reply < 0 && ch != ' ' && ch != '\t')
-                    reply = ch == 'y' || ch == 'Y' ? 1 : 0;
-            } while (ch != EOF && ch != '\n' && ch != '\r');
-            if (reply == 1)
-                g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY,
-                              0600);
-        }
-
-        // if exists and no overwrite, report and go on to next
+        // if it exists and wasn't forced, give the user a chance to overwrite
         if (g.outd < 0 && errno == EEXIST) {
-            complain("skipping: %s exists", g.outf);
-            RELEASE(g.outf);
-            load_end();
-            return;
+            int overwrite = 0;
+            if (isatty(0) && g.verbosity) {
+                // get a response from the user -- the first non-blank
+                // character has to be a "y" or a "Y" to permit an overwrite
+                fprintf(stderr, "%s exists -- overwrite (y/n)? ", g.outf);
+                fflush(stderr);
+                int ch, first = 1;
+                do {
+                    ch = getchar();
+                    if (first == 1) {
+                        if (ch == ' ' || ch == '\t')
+                            continue;
+                        if (ch == 'y' || ch == 'Y')
+                            overwrite = 1;
+                        first = 0;
+                    }
+                } while (ch != EOF && ch != '\n' && ch != '\r');
+            }
+            if (!overwrite) {
+                complain("skipping: %s exists", g.outf);
+                RELEASE(g.outf);
+                load_end();
+                return;
+            }
+            g.outd = open(g.outf, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         }
 
         // if some other error, give up
