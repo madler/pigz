@@ -323,6 +323,7 @@
 
 // Use large file functions if available.
 #define _FILE_OFFSET_BITS 64
+#define _LARGE_FILES            // for AIX
 
 // Included headers and what is expected from each.
 #include <stdio.h>      // fflush(), fprintf(), fputs(), getchar(), putc(),
