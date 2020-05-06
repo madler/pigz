@@ -418,8 +418,8 @@
 #define local static
 
 // Prevent end-of-line conversions on MSDOSish operating systems.
-#if defined(MSDOS) || defined(OS2) || defined(WIN32) || defined(__CYGWIN__)
-#  include <io.h>       // setmode(), O_BINARY
+#if defined(MSDOS) || defined(OS2) || defined(_WIN32) || defined(__CYGWIN__)
+#  include <io.h>       // setmode(), O_BINARY, _commit() for _WIN32
 #  define SET_BINARY_MODE(fd) setmode(fd, O_BINARY)
 #else
 #  define SET_BINARY_MODE(fd)
@@ -3836,16 +3836,14 @@ local void touch(char *path, time_t t) {
 // memory on the device itself, leaving open a window of vulnerability.
 // fcntl(fd, F_FULLSYNC) on the other hand, available in macOS only, will
 // request and wait for the device to write out its buffered data to permanent
-// storage.
-//
-// For a future Windows port of pigz, winbase.h should be included and
-// FlushFileBuffers() used, which also waits for the device write out its
-// buffered data to permanent storage.
+// storage. On Windows, _commit() is used.
 local void out_push(void) {
     if (g.outd == -1)
         return;
-#ifdef F_FULLSYNC
+#if defined(F_FULLSYNC)
     int ret = fcntl(g.outd, F_FULLSYNC);
+#elif defined(_WIN32)
+    int ret = _commit(g.outd);
 #else
     int ret = fsync(g.outd);
 #endif
