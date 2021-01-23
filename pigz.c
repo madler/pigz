@@ -3568,8 +3568,10 @@ local void infchk(void) {
         cat();
 
     // check for more entries in zip file
-    else if (more)
+    else if (more) {
         complain("warning: %s: entries after the first were ignored", g.inf);
+        g.keep = 1;         // don't delete the .zip file
+    }
 
     // check for non-gzip after gzip stream, or anything after zlib stream
     else if ((g.verbosity > 1 && g.form == 0 && ret != -1) ||
