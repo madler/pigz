@@ -321,9 +321,10 @@
    buffers to about the same number.
  */
 
-// Use large file functions if available.
-#define _FILE_OFFSET_BITS 64
-#define _LARGE_FILES            // for AIX
+// Portability defines.
+#define _FILE_OFFSET_BITS 64            // Use large file functions
+#define _LARGE_FILES                    // Same thing for AIX
+#define _POSIX_C_SOURCE 200809L         // For MinGW
 
 // Included headers and what is expected from each.
 #include <stdio.h>      // fflush(), fprintf(), fputs(), getchar(), putc(),
