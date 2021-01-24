@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007-2017 Mark Adler
- * Version 2.4.1x  xx Dec 2017  Mark Adler
+ * Copyright (C) 2007-2021 Mark Adler
+ * Version 2.5  23 Jan 2021  Mark Adler
  */
 
 /*
@@ -186,9 +186,18 @@
                        Disallow an empty suffix (e.g. --suffix '')
                        Return an exit code of 1 if any issues are encountered
                        Fix sign error in compression reduction percentage
+   2.5    23 Jan 2021  Add --alias/-A option to set .zip name for stdin input
+                       Add --comment/-C option to add comment in .gz or .zip
+                       Fix a bug that misidentified a multi-entry .zip
+                       Fix a bug that did not emit double syncs for -i -p 1
+                       Fix a bug in yarn that could try to access freed data
+                       Do not delete multi-entry .zip files when extracting
+                       Do not reject .zip entries with bit 11 set
+                       Avoid a possible threads lock-order inversion
+                       Ignore trailing junk after a gzip stream by default
  */
 
-#define VERSION "pigz 2.4.1x"
+#define VERSION "pigz 2.5"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
@@ -4415,7 +4424,7 @@ local int option(char *arg) {
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 puts(VERSION);
-                puts("Copyright (C) 2007-2017 Mark Adler");
+                puts("Copyright (C) 2007-2021 Mark Adler");
                 puts("Subject to the terms of the zlib license.");
                 puts("No warranty is provided or implied.");
                 exit(0);
