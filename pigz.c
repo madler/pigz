@@ -545,7 +545,9 @@ local struct {
     int procs;              // maximum number of compression threads (>= 1)
     int setdict;            // true to initialize dictionary in each thread
     size_t block;           // uncompressed input size per thread (>= 32K)
+#ifndef NOTHREAD
     crc_t shift;            // pre-calculated CRC-32 shift for length block
+#endif
 
     // saved gzip/zip header data for decompression, testing, and listing
     time_t stamp;           // time stamp from gzip header
@@ -4286,13 +4288,13 @@ local void defaults(void) {
     //  blocksplittingmax = 15
     ZopfliInitOptions(&g.zopts);
 #endif
+    g.block = 131072UL;             // 128K
 #ifdef NOTHREAD
     g.procs = 1;
 #else
     g.procs = nprocs(8);
-#endif
-    g.block = 131072UL;             // 128K
     g.shift = x2nmodp(g.block, 3);
+#endif
     g.rsync = 0;                    // don't do rsync blocking
     g.setdict = 1;                  // initialize dictionary each thread
     g.verbosity = 1;                // normal message level
@@ -4480,7 +4482,9 @@ local int option(char *arg) {
         if (get == 1) {
             n = num(arg);
             g.block = n << 10;                  // chunk size
+#ifndef NOTHREAD
             g.shift = x2nmodp(g.block, 3);
+#endif
             if (g.block < DICT)
                 throw(EINVAL, "block size too small (must be >= 32K)");
             if (n != g.block >> 10 ||
