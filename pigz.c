@@ -333,7 +333,7 @@
 // Portability defines.
 #define _FILE_OFFSET_BITS 64            // Use large file functions
 #define _LARGE_FILES                    // Same thing for AIX
-#define _POSIX_C_SOURCE 200809L         // For MinGW
+#define _XOPEN_SOURCE 700               // For POSIX 2008
 
 // Included headers and what is expected from each.
 #include <stdio.h>      // fflush(), fprintf(), fputs(), getchar(), putc(),
@@ -874,10 +874,10 @@ local void log_dump(void) {
         ;
     log_free();
     if (mem_track.num || mem_track.size)
-        complain("memory leak: %lu allocs of %lu bytes total",
+        complain("memory leak: %zu allocs of %zu bytes total",
                  mem_track.num, mem_track.size);
     if (mem_track.max)
-        fprintf(stderr, "%lu bytes of memory used in %lu allocs\n",
+        fprintf(stderr, "%zu bytes of memory used in %zu allocs\n",
                 mem_track.max, mem_track.tot);
 }
 
@@ -993,7 +993,7 @@ local size_t writen(int desc, void const *buf, size_t len) {
     size_t left = len;
 
     while (left) {
-        size_t const max = SIZE_MAX >> 1;       // max ssize_t
+        size_t const max = SSIZE_MAX;
         ssize_t ret = write(desc, next, left > max ? max : left);
         if (ret < 1)
             throw(errno, "write error on %s (%s)", g.outf, strerror(errno));
@@ -1669,25 +1669,31 @@ local void compress_thread(void *dummy) {
 #if ZLIB_VERNUM >= 0x1260
     int bits;                       // deflate pending bits
 #endif
-#ifndef NOZOPFLI
-    struct space *temp = NULL;      // temporary space for zopfli input
-#endif
     int ret;                        // zlib return code
-    z_stream strm;                  // deflate stream
     ball_t err;                     // error information from throw()
 
     (void)dummy;
 
     try {
-        // initialize the deflate stream for this thread
-        strm.zfree = ZFREE;
-        strm.zalloc = ZALLOC;
-        strm.opaque = OPAQUE;
-        ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
-        if (ret == Z_MEM_ERROR)
-            throw(ENOMEM, "not enough memory");
-        if (ret != Z_OK)
-            throw(EINVAL, "internal error");
+        z_stream strm;                  // deflate stream
+#ifndef NOZOPFLI
+        struct space *temp = NULL;
+        // get temporary space for zopfli input
+        if (g.level > 9)
+            temp = get_space(&out_pool);
+        else
+#endif
+        {
+            // initialize the deflate stream for this thread
+            strm.zfree = ZFREE;
+            strm.zalloc = ZALLOC;
+            strm.opaque = OPAQUE;
+            ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+            if (ret == Z_MEM_ERROR)
+                throw(ENOMEM, "not enough memory");
+            if (ret != Z_OK)
+                throw(EINVAL, "internal error");
+        }
 
         // keep looking for work
         for (;;) {
@@ -1714,11 +1720,8 @@ local void compress_thread(void *dummy) {
                 (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
 #ifndef NOZOPFLI
             }
-            else {
-                if (temp == NULL)
-                    temp = get_space(&out_pool);
+            else
                 temp->len = 0;
-            }
 #endif
 
             // set dictionary if provided, release that input or dictionary
@@ -1912,11 +1915,15 @@ local void compress_thread(void *dummy) {
         }
 
         // found job with seq == -1 -- return to join
-#ifndef NOZOPFLI
-        drop_space(temp);
-#endif
         release(compress_have);
-        (void)deflateEnd(&strm);
+#ifndef NOZOPFLI
+        if (g.level > 9)
+            drop_space(temp);
+        else
+#endif
+        {
+            (void)deflateEnd(&strm);
+        }
     }
     catch (err) {
         THREADABORT(err);
@@ -3078,7 +3085,7 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
         strncpy(tag, "<...>", max + 1);
     else if (g.hname == NULL) {
         n = strlen(g.inf) - compressed_suffix(g.inf);
-        strncpy(tag, g.inf, n > max + 1 ? max + 1 : n);
+        memcpy(tag, g.inf, n > max + 1 ? max + 1 : n);
         if (strcmp(g.inf + n, ".tgz") == 0 && n < max + 1)
             strncpy(tag + n, ".tar", max + 1 - n);
     }
@@ -3802,36 +3809,32 @@ local char *justname(char *path) {
     return p == NULL ? path : p + 1;
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-result"
-
 // Copy file attributes, from -> to, as best we can. This is best effort, so no
 // errors are reported. The mode bits, including suid, sgid, and the sticky bit
 // are copied (if allowed), the owner's user id and group id are copied (again
 // if allowed), and the access and modify times are copied.
-local void copymeta(char *from, char *to) {
+local int copymeta(char *from, char *to) {
     struct stat st;
     struct timeval times[2];
 
     // get all of from's Unix meta data, return if not a regular file
     if (stat(from, &st) != 0 || (st.st_mode & S_IFMT) != S_IFREG)
-        return;
+        return -4;
 
     // set to's mode bits, ignore errors
-    (void)chmod(to, st.st_mode & 07777);
+    int ret = chmod(to, st.st_mode & 07777);
 
     // copy owner's user and group, ignore errors
-    (void)chown(to, st.st_uid, st.st_gid);
+    ret += chown(to, st.st_uid, st.st_gid);
 
     // copy access and modify times, ignore errors
     times[0].tv_sec = st.st_atime;
     times[0].tv_usec = 0;
     times[1].tv_sec = st.st_mtime;
     times[1].tv_usec = 0;
-    (void)utimes(to, times);
+    ret += utimes(to, times);
+    return ret;
 }
-
-#pragma GCC diagnostic pop
 
 // Set the access and modify times of fd to t.
 local void touch(char *path, time_t t) {
@@ -4430,6 +4433,7 @@ local int option(char *arg) {
                 puts("Subject to the terms of the zlib license.");
                 puts("No warranty is provided or implied.");
                 exit(0);
+                break;          // avoid warning
             case 'M':  g.headis |= 0xa;  break;
             case 'N':  g.headis = 0xf;  break;
 #ifndef NOZOPFLI
@@ -4443,13 +4447,16 @@ local int option(char *arg) {
                 if (g.verbosity > 1)
                     printf("zlib %s\n", zlibVersion());
                 exit(0);
+                break;          // avoid warning
             case 'Y':  g.sync = 1;  break;
             case 'Z':
                 throw(EINVAL, "invalid option: LZW output not supported: %s",
                       bad);
+                break;          // avoid warning
             case 'a':
                 throw(EINVAL, "invalid option: no ascii conversion: %s",
                       bad);
+                break;          // avoid warning
             case 'b':  get = 1;  break;
             case 'c':  g.pipeout = 1;  break;
             case 'd':  if (!g.decode) g.headis >>= 2;  g.decode = 1;  break;
