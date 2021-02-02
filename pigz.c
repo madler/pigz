@@ -538,6 +538,7 @@ local struct {
     int first;              // true if we need to print listing header
     int decode;             // 0 to compress, 1 to decompress, 2 to test
     int level;              // compression level
+    int strategy;           // compression strategy
 #ifndef NOZOPFLI
     ZopfliOptions zopts;    // zopfli compression options
 #endif
@@ -1688,7 +1689,7 @@ local void compress_thread(void *dummy) {
             strm.zfree = ZFREE;
             strm.zalloc = ZALLOC;
             strm.opaque = OPAQUE;
-            ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+            ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, g.strategy);
             if (ret == Z_MEM_ERROR)
                 throw(ENOMEM, "not enough memory");
             if (ret != Z_OK)
@@ -1717,7 +1718,7 @@ local void compress_thread(void *dummy) {
             if (g.level <= 9) {
 #endif
                 (void)deflateReset(&strm);
-                (void)deflateParams(&strm, g.level, Z_DEFAULT_STRATEGY);
+                (void)deflateParams(&strm, g.level, g.strategy);
 #ifndef NOZOPFLI
             }
             else
@@ -2279,7 +2280,7 @@ local void single_compress(int reset) {
         strm->zfree = ZFREE;
         strm->zalloc = ZALLOC;
         strm->opaque = OPAQUE;
-        ret = deflateInit2(strm, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+        ret = deflateInit2(strm, 6, Z_DEFLATED, -15, 8, g.strategy);
         if (ret == Z_MEM_ERROR)
             throw(ENOMEM, "not enough memory");
         if (ret != Z_OK)
@@ -2294,7 +2295,7 @@ local void single_compress(int reset) {
     if (g.level <= 9) {
 #endif
         (void)deflateReset(strm);
-        (void)deflateParams(strm, g.level, Z_DEFAULT_STRATEGY);
+        (void)deflateParams(strm, g.level, g.strategy);
 #ifndef NOZOPFLI
     }
 #endif
@@ -4208,6 +4209,7 @@ local char *helptext[] = {
 "  -F  --first          Do iterations first, before block split for -11",
 #endif
 "  -h, --help           Display a help screen and quit",
+"  -H, --huffman        Use only Huffman coding for compression",
 "  -i, --independent    Compress blocks independently for damage recovery",
 #ifndef NOZOPFLI
 "  -I, --iterations n   Number of iterations for -11 optimization",
@@ -4233,6 +4235,7 @@ local char *helptext[] = {
 "  -R, --rsyncable      Input-determined block locations for rsync",
 "  -S, --suffix .sss    Use suffix .sss instead of .gz (for compression)",
 "  -t, --test           Test the integrity of the compressed input",
+"  -U, --rle            Use run-length encoding for compression",
 #ifdef PIGZ_DEBUG
 "  -v, --verbose        Provide more verbose output (-vv to debug)",
 #else
@@ -4282,6 +4285,7 @@ local int nprocs(int n) {
 // Set option defaults.
 local void defaults(void) {
     g.level = Z_DEFAULT_COMPRESSION;
+    g.strategy = Z_DEFAULT_STRATEGY;
 #ifndef NOZOPFLI
     // default zopfli options as set by ZopfliInitOptions():
     //  verbose = 0
@@ -4329,7 +4333,8 @@ local char *longopts[][2] = {
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
     {"silent", "q"}, {"stdout", "c"}, {"suffix", "S"}, {"synchronous", "Y"},
     {"test", "t"}, {"time", "M"}, {"to-stdout", "c"}, {"uncompress", "d"},
-    {"verbose", "v"}, {"version", "V"}, {"zip", "K"}, {"zlib", "z"}};
+    {"verbose", "v"}, {"version", "V"}, {"zip", "K"}, {"zlib", "z"},
+    {"huffman", "H"}, {"rle", "U"}};
 #define NLOPTS (sizeof(longopts) / (sizeof(char *) << 1))
 
 // Either new buffer size, new compression level, or new number of processes.
@@ -4424,6 +4429,7 @@ local int option(char *arg) {
 #ifndef NOZOPFLI
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
             case 'I':  get = 4;  break;
+            case 'H':  g.strategy = Z_HUFFMAN_ONLY;  break;
             case 'J':  get = 5;  break;
 #endif
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
@@ -4472,6 +4478,7 @@ local int option(char *arg) {
             case 'q':  g.verbosity = 0;  break;
             case 'r':  g.recurse = 1;  break;
             case 't':  g.decode = 2;  break;
+            case 'U':  g.strategy = Z_RLE;  break;
             case 'v':  g.verbosity++;  break;
             case 'z':  g.form = 1;  g.sufx = ".zz";  break;
             default:
