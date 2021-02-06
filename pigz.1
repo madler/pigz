@@ -1,4 +1,4 @@
-.TH PIGZ 1 "January 23, 2021"
+.TH PIGZ 1 "February 6, 2021"
 .SH NAME
 pigz, unpigz \- compress or expand files
 .SH SYNOPSIS
@@ -136,6 +136,9 @@ Set compression block size to mmmK (default 128KiB).
 .B -c --stdout --to-stdout
 Write all processed output to stdout (won't delete).
 .TP
+.B -C --comment ccc
+Include the provided comment in the gzip header or zip central file header.
+.TP
 .B -d --decompress --uncompress
 Decompress the compressed input.
 .TP
@@ -144,6 +147,9 @@ Force overwrite, compress .gz, links, and to terminal.
 .TP
 .B -h --help
 Display a help screen and quit.
+.TP
+.B -H --huffman
+Compress using the Huffman-only strategy.
 .TP
 .B -i --independent
 Compress blocks independently for damage recovery.
@@ -183,9 +189,6 @@ the modification time of the compressed file is used (not the current time).
 Store or restore both the file name and the modification time. This is the
 default when compressing.
 .TP
-.B -C --comment ccc
-Include the provided comment in the gzip header or zip central file header.
-.TP
 .B -p --processes n
 Allow up to n processes (default is the number of online processors)
 .TP
@@ -203,6 +206,9 @@ Use suffix .sss instead of .gz (for compression).
 .TP
 .B -t --test
 Test the integrity of the compressed input.
+.TP
+.B -U --rle
+Compress using the run length encoding strategy.
 .TP
 .B -v --verbose
 Provide more verbose output.

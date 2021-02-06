@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
  * Copyright (C) 2007-2021 Mark Adler
- * Version 2.5  23 Jan 2021  Mark Adler
+ * Version 2.6  6 Feb 2021  Mark Adler
  */
 
 /*
@@ -195,9 +195,12 @@
                        Do not reject .zip entries with bit 11 set
                        Avoid a possible threads lock-order inversion
                        Ignore trailing junk after a gzip stream by default
+   2.6     6 Feb 2021  Add --huffman/-H and --rle/U strategy options
+                       Fix issue when compiling for no threads
+                       Fail silently on a broken pipe
  */
 
-#define VERSION "pigz 2.5"
+#define VERSION "pigz 2.6"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
