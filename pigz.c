@@ -914,7 +914,8 @@ local void cut_short(int sig) {
 // Common code for catch block of top routine in the thread.
 #define THREADABORT(ball) \
     do { \
-        complain("abort: %s", (ball).why); \
+        if ((ball).code != EPIPE) \
+            complain("abort: %s", (ball).why); \
         drop(ball); \
         cut_short(-(ball).code); \
     } while (0)
