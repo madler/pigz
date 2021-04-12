@@ -1,6 +1,6 @@
 /* try.h -- try / catch / throw exception handling for C99
-  Copyright (C) 2013, 2015 Mark Adler
-  Version 1.2  19 January 2015
+  Copyright (C) 2013, 2015, 2016, 2021 Mark Adler
+  Version 1.5  10 April 2021
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the author be held liable for any damages
@@ -28,16 +28,18 @@
                           structure assignment, allowing arbitrary arguments
                           to printf()
     1.2   19 Jan 2015   - Obey setjmp() invocation limits from C standard
+    1.3    1 Mar 2015   - Add preserve to avoid use of volatile, remove retry
+    1.4    2 Jan 2016   - Add no-return attribute to throw()
+    1.5   10 Apr 2021   - Portability improvements
  */
 
 /* To use, include try.h in all source files that use these operations, and
-   compile and link try.c.  If pthread threads are used, then there must be an
-   #include <pthread.h> in try.h to make the exception handling thread-safe.
-   (Uncomment the include below.)  If threads other than pthread are being
-   used, then try.h and try.c must be modified to use that environment's
-   thread-local storage for the try_stack_ pointer.  try.h and try.c assume
-   that the compiler and library conform to the C99 standard, at least with
-   respect to the use of variadic macro and function arguments. */
+   compile and link try.c.  By default, pthread threads are used to make the
+   exception handling thread-safe. If a different threads library is required,
+   then try.h and try.c must be modified to use that environment's thread-local
+   storage for the try_stack_ pointer.  try.h and try.c assume that the
+   compiler and library conform to the C99 standard, at least with respect to
+   the use of variadic macro and function arguments. */
 
 /*
    try.h provides a try / catch / throw exception handler, which allows
@@ -46,12 +48,12 @@
    innermost enclosing try, passing the thrown information to the associated
    catch block.  A global try stack is used, to avoid having to pass exception
    handler information through all of the functions down to the invocations of
-   throw.  The try stack is thread-unique if requested by uncommenting the
-   pthread.h include below.  In addition to the macros try, catch, and throw,
-   the macros always, retry, punt, and drop, and the type ball_t are created.
-   All other symbols are of the form try_*_ or TRY_*_, where the final
-   underscore should avoid conflicts with application symbols. The eight
-   exposed names can be changed easily in #defines below.
+   throw.  The try stack is thread-unique if pthread is made available.  In
+   addition to the macros try, catch, and throw, the macros preserve, always,
+   punt, and drop, and the type ball_t are created.  All other symbols are of
+   the form try_*_ or TRY_*_, where the final underscore should avoid conflicts
+   with application symbols. The eight exposed names can be changed easily in
+   #defines below.
 
    A try block encloses code that may throw an exception with the throw()
    macro, either directly in the try block or in any function called directly
@@ -88,7 +90,7 @@
    is the argument of catch.  This passes the exception on to the next
    enclosing try/catch handler.
 
-   If a catch block does not always end with a punt(), it should contain a
+   If a catch block does not always complete with a punt(), it should contain a
    drop(), where the argument of drop() is the argument of catch.  This frees
    the allocated string made if vsnprintf() was used by throw() to generate the
    string.  If printf() format strings are never used, then drop() is not
@@ -103,9 +105,6 @@
 
    A naked break or continue in a try or always block will go directly to the
    end of that block.
-
-   A retry from the try block or from any function called from the try block at
-   any level of nesting will restart the try block from the beginning.
 
    try is thread-safe when compiled with pthread.h.  A throw() in a thread can
    only be caught in the same thread.  If a throw() is attempted from a thread
@@ -126,16 +125,25 @@
    There must not be a return in any try block, nor a goto in any try block
    that leaves that block.  The always block does not catch a return from the
    try block.  There is no check or protection for an improper use of return or
-   goto.  It is up to the user to assure that this doesn't happen. If it does
+   goto.  It is up to the user to assure that this doesn't happen.  If it does
    happen, then the reference to the current try block is left on the try
    stack, and the next throw which is supposed to go to an enclosing try would
    instead go to this try, possibly after the enclosing function has returned.
    Mayhem will then ensue.  This may be caught by the longjmp() implementation,
    which would report "longjmp botch" and then abort.
 
-   Any automatic storage variables that are modified in the try block and used
-   in the catch or always block must be declared volatile.  Otherwise their
-   value in the catch or always block is indeterminate.
+   Any local automatic storage variables that are modified in the try block and
+   used in the catch or always block must be declared volatile.  Otherwise
+   their value in the catch or always block is indeterminate.  Alternatively, a
+   preserve block can be inserted after an automatic storage variable is
+   changed in a try block.  The preserve block saves the state of those
+   variables at the moment preserve is executed, and effectively continues the
+   try block.  The same admonition then applies to variables modified in the
+   preserve block.  The only assurance is that the catch and always block will
+   have the values of the local automatic storage variables as they were at the
+   time of the last try or preserve statement, but only if they have not been
+   modified since the last try or preserve statement.  As many preserve blocks
+   as desired are permitted.
 
    Any statements between try and always, between try and catch if there is no
    always, or between always and catch are part of those respective try or
@@ -151,15 +159,58 @@
    in try.c should be updated accordingly.  If there is no memory allocation in
    throw(), then drop() can be eliminated.
 
+
+   Summary:
+
+   Here is the permitted structure, where [] means an optional element
+   permitted once, and []* means an optional element permitted more than once:
+
+   try { body } [preserve { body }]* [always { clean }] catch (ball) { action }
+
+   body must not contain a goto or return that exits body.  ball must be a
+   variable of the type ball_t.  "action" must always execute either a
+   drop(ball) or a punt(ball).
+
+   A throw() may be executed in body or at any level of functions called by
+   body, and will be processed by the innermost enclosing try in the same
+   thread:
+
+       throw(code);
+
+   or,
+
+       throw(code, "string");
+
+   or,
+
+       throw(code, "format string", ...);
+
+   A throw() whose first argument is not zero, and that is caught by this try,
+   will execute "clean" followed by "action".  Either a throw() whose first
+   argument is zero and caught by this try, or the normal completion of body,
+   results in the execution of just "clean", with execution continuing after
+   the catch block.  If "action" does not execute a punt(ball), then execution
+   continues after the catch block.  If "action" does execute a punt(ball),
+   then what was caught is thrown to the next enclosing try.
+
+   A '} preserve {' must be inserted in body after any local automatic storage
+   variable is changed in body that can be used in the always or catch block.
+   Alternatively, such variables may be declared volatile.  However the use of
+   volatile can limit optimization, and has a tendency to propagate compiler
+   warnings.
+
+
    Example usage:
 
     ball_t err;
-    volatile char *temp = NULL;
+    char *temp = NULL;
     try {
         ... do something ...
         if (ret == -1)
             throw(1, "bad thing happened to %s\n", me);
         temp = malloc(sizeof(me) + 1);
+    }
+    preserve {
         if (temp == NULL)
             throw(2, "out of memory");
         ... do more ...
@@ -256,7 +307,8 @@
 #include <assert.h>
 #include <setjmp.h>
 
-/* If pthreads are used, uncomment this include to make try thread-safe. */
+/* If a POSIX pthread library is not available, then compile with NOTHREAD
+   defined. */
 #ifndef NOTHREAD
 #  include <pthread.h>
 #endif
@@ -264,10 +316,10 @@
 /* The exposed names can be changed here. */
 #define ball_t try_ball_t_
 #define try TRY_TRY_
+#define preserve TRY_PRESERVE_
 #define always TRY_ALWAYS_
 #define catch TRY_CATCH_
 #define throw TRY_THROW_
-#define retry TRY_RETRY_
 #define punt TRY_PUNT_
 #define drop TRY_DROP_
 
@@ -279,6 +331,7 @@
    in try.c must also be updated accordingly.  As an example, why could be a
    structure with information for use in the catch block. */
 typedef struct {
+    int ret;            /* longjmp() return value */
     int code;           /* integer code (required) */
     int free;           /* if true, the message string was allocated */
     char *why;          /* informational string or NULL */
@@ -314,29 +367,46 @@ struct try_s_ {
 #endif /* PTHREAD_ONCE_INIT */
 
 /* Try a block.  The block should follow the invocation of try enclosed in { }.
-   The block must be immediately followed by an always or a catch.  You must
-   not goto or return out of the try block.  A naked break or continue in the
-   try block will go to the end of the block. */
+   The block must be immediately followed by a preserve, always, or catch.  You
+   must not goto or return out of the try block.  A naked break or continue in
+   the try block will go to the end of the block. */
 #define TRY_TRY_ \
     do { \
         try_t_ try_this_; \
         volatile int try_pushed_ = 1; \
+        try_this_.ball.ret = 0; \
         try_this_.ball.code = 0; \
         try_this_.ball.free = 0; \
         try_this_.ball.why = NULL; \
         try_setup_(); \
         try_this_.next = try_stack_; \
         try_stack_set_(&try_this_); \
-        if (setjmp(try_this_.env) < 2) \
+        if (setjmp(try_this_.env) == 0) \
+            do { \
+
+/* Preserve local automatic variables that were changed in the try block by
+   reissuing the setjmp(), replacing the state for the next longjmp().  The
+   preserve block should be enclosed in { }.  The block must be immediately
+   followed by a preserve, always, or catch.  You must not goto or return out
+   of the preserve block.  A naked break or continue in the preserve block will
+   go to the end of the block.  This can only follow a try or another preserve.
+   preserve effectively saves the state of local automatic variables at threat,
+   i.e. the register state, at that point so that a subsequent throw() will
+   restore those variables to that state for the always and catch blocks.
+   Changes to those variables after the preserve statement may or may not be
+   reflected in the always and catch blocks. */
+#define TRY_PRESERVE_ \
+            } while (0); \
+        if (try_this_.ball.ret == 0) if (setjmp(try_this_.env) == 0) \
             do { \
 
 /* Execute the code between always and catch, whether or not something was
    thrown.  An always block is optional.  If present, the always block must
-   follow a try block and be followed by a catch block.  The always block
-   should be enclosed in { }.  A naked break or continue in the always block
-   will go to the end of the block.  It is permitted to use throw in the always
-   block, which will fall up to the next enclosing try.  However this will
-   result in a memory leak if the original throw() allocated space for the
+   follow a try or preserve block and be followed by a catch block.  The always
+   block should be enclosed in { }.  A naked break or continue in the always
+   block will go to the end of the block.  It is permitted to use throw in the
+   always block, which will fall up to the next enclosing try.  However this
+   will result in a memory leak if the original throw() allocated space for the
    informational string.  So it's best to not throw() in an always block.  Keep
    the always block simple.
 
@@ -354,27 +424,29 @@ struct try_s_ {
             try_stack_set_(try_this_.next); \
             try_pushed_ = 0; \
         } \
+        if (1) \
             do {
 
 /* Catch an error thrown in the preceding try block.  The catch block must
    follow catch and its parameter, and must be enclosed in { }.  The catch must
-   immediately follow the try or always block.  It is permitted to use throw()
-   in the catch block, which will fall up to the next enclosing try.  However
-   the ball_t passed by throw() must be freed using drop() before doing another
-   throw, to avoid a potential memory leak. The parameter of catch must be a
-   ball_t declared in the function or block containing the catch.  It is set to
-   the parameters of the throw() that jumped to the catch.  The catch block is
-   not executed if the first parameter of the throw() was zero.
+   immediately follow a try, preserve, or always block.  It is permitted to use
+   throw() in the catch block, which will fall up to the next enclosing try.
+   However the ball_t passed by throw() must be freed using drop() before doing
+   another throw, to avoid a potential memory leak. The parameter of catch must
+   be a ball_t declared in the function or block containing the catch.  It is
+   set to the parameters of the throw() that jumped to the catch.  The catch
+   block is not executed if the first parameter of the throw() was zero.
 
    A catch block should end with either a punt() or a drop().
 
    Great care must be taken if the catch block uses an automatic storage
    variable local to the enclosing function that can be modified in the try
-   block.  Such variables must be declared volatile.  If such a variable is not
-   declared volatile, and if the compiler elects to keep that variable in a
-   register, then the throw will restore that variable to its state at the
-   beginning of the try block, wiping out any change that occurred in the try
-   block.  This can cause very confusing bugs until you remember that you
+   block.  Such variables must be declared volatile or preserve must be used to
+   save their state.  If such a variable is not declared volatile, and if the
+   compiler elects to keep that variable in a register, then the throw will
+   restore that variable to its state at the beginning of the most recent try
+   or preserve block, wiping out any change that occurred after the start of
+   that block.  This can cause very confusing bugs until you remember that you
    didn't follow this rule. */
 #define TRY_CATCH_(try_ball_) \
             } while (0); \
@@ -418,29 +490,13 @@ struct try_s_ {
    to make use of any arguments after the 0 anyway.
 
    try.c must be compiled and linked to provide the try_throw_() function. */
-void try_throw_(int code, char *fmt, ...);
+void try_throw_(int code, char *fmt, ...)
+#if defined(__GNUC__) || defined(__has_builtin)
+                                                __attribute__((noreturn))
+#endif
+    ;
+
 #define TRY_THROW_(...) try_throw_(__VA_ARGS__, NULL)
-
-/* Retry the try block.  This will start over at the beginning of the try
-   block.  This can be used in the try block or in any function called from the
-   try block at any level of nesting, just like throw.  retry has no argument.
-   If there is a retry in the always or catch block, then it will retry the
-   next enclosing try, not the immediately preceding try.
-
-   If you use this, make sure you have carefully thought through how it will
-   work.  It can be tricky to correctly rerun a chunk of code that has been
-   partially executed.  Especially if there are different degrees of progress
-   that could have been made.  Also note that automatic variables changed in
-   the try block and not declared volatile will have indeterminate values.
-
-   We use 1 here instead of 0, since some implementations prevent returning a
-   zero value from longjmp() to setjmp(). */
-#define TRY_RETRY_ \
-    do { \
-        try_setup_(); \
-        assert(try_stack_ != NULL && "try: naked retry"); \
-        longjmp(try_stack_->env, 1); \
-    } while (0)
 
 /* Punt a caught error on to the next enclosing catcher.  This is normally used
    in a catch block with same argument as the catch. */
@@ -449,7 +505,7 @@ void try_throw_(int code, char *fmt, ...);
         try_setup_(); \
         assert(try_stack_ != NULL && "try: naked punt"); \
         try_stack_->ball = try_ball_; \
-        longjmp(try_stack_->env, 2); \
+        longjmp(try_stack_->env, 1); \
     } while (0)
 
 /* Clean up at the end of the line in a catch (no more punts). */

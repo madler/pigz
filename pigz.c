@@ -516,7 +516,7 @@
 
 // Globals (modified by main thread only when it's the only thread).
 local struct {
-    int volatile ret;       // pigz return code
+    int ret;                // pigz return code
     char *prog;             // name by which pigz was invoked
     int ind;                // input file descriptor
     int outd;               // output file descriptor

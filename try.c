@@ -1,7 +1,5 @@
 /* try.c -- try / catch / throw exception handling for C99
- * Copyright (C) 2013, 2015 Mark Adler
- * Version 1.2  19 January 2015
- * For conditions of distribution and use, see copyright notice in try.h
+ * For copyright, version, and conditions of distribution and use, see try.h
  */
 
 /* See try.h for documentation.  This source file provides the global pointer
@@ -40,6 +38,7 @@ void try_throw_(int code, char *fmt, ...)
     /* save the thrown information in the try stack before jumping */
     try_setup_();
     assert(try_stack_ != NULL && "try: naked throw");
+    try_stack_->ball.ret = 1;
     try_stack_->ball.code = code;
     try_stack_->ball.free = 0;
     try_stack_->ball.why = fmt;
@@ -70,5 +69,5 @@ void try_throw_(int code, char *fmt, ...)
     }
 
     /* jump to the end of the nearest enclosing try block */
-    longjmp(try_stack_->env, 2);
+    longjmp(try_stack_->env, 1);
 }
