@@ -3100,7 +3100,7 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
         strcpy(tag + max - 3, "...");
 
     // convert time stamp to text
-    if (g.stamp) {
+    if (g.stamp && !cont) {
         strcpy(mod, ctime(&g.stamp));
         now = time(NULL);
         if (strcmp(mod + 20, ctime(&now) + 20) != 0)
