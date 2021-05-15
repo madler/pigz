@@ -367,9 +367,11 @@
 #  include <inttypes.h> // intmax_t, uintmax_t
    typedef uintmax_t length_t;
    typedef uint32_t crc_t;
+   typedef uint_least16_t index_t;
 #else
    typedef unsigned long length_t;
    typedef unsigned long crc_t;
+   typedef unsigned index_t;
 #endif
 
 #ifdef PIGZ_DEBUG
@@ -3642,7 +3644,7 @@ local void unlzw(void) {
     // memory for unlzw() -- the first 256 entries of prefix[] and suffix[] are
     // never used, so could have offset the index but it's faster to waste a
     // little memory
-    uint_least16_t prefix[65536];       // index to LZW prefix string
+    index_t prefix[65536];              // index to LZW prefix string
     unsigned char suffix[65536];        // one-character LZW suffix
     unsigned char match[65280 + 2];     // buffer for reversed match
 
@@ -3788,7 +3790,7 @@ local void unlzw(void) {
             // link new table entry
             if (end < mask) {
                 end++;
-                prefix[end] = (uint_least16_t)prev;
+                prefix[end] = (index_t)prev;
                 suffix[end] = (unsigned char)final;
             }
 
