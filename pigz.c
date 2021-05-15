@@ -3444,12 +3444,14 @@ local int outb(void *desc, unsigned char *buf, unsigned len) {
 // and check the gzip, zlib, or zip trailer.
 local void infchk(void) {
     int ret, cont, more;
-    unsigned long check, len;
+    unsigned long check, len, ktot;
     z_stream strm;
     unsigned tmp2;
     unsigned long tmp4;
-    length_t clen;
+    length_t clen, ctot, utot;
 
+    ctot = utot = 0;
+    ktot = CHECK(0L, Z_NULL, 0);
     cont = more = 0;
     do {
         // header already read -- set up for decompression
@@ -3576,14 +3578,30 @@ local void infchk(void) {
 
         // show file information if requested
         if (g.list) {
+            ctot += clen;
+            utot += g.out_tot;
+            ktot = COMB(ktot, check, g.out_tot);
             g.in_tot = clen;
             show_info(8, check, g.out_tot, cont);
-            cont = 1;
+            cont = cont ? 2 : 1;
         }
 
         // if a gzip entry follows a gzip entry, decompress it (don't replace
         // saved header information from first entry)
     } while (g.form == 0 && (ret = get_header(0)) == 8);
+
+    // show totals if more than one gzip member
+    if (cont > 1 && g.verbosity > 0) {
+        if (g.verbosity > 1)
+            printf("        %08lx                ", ktot);
+        printf(
+#if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
+               "%10ju %10ju %6.1f%%  (total)\n",
+#else
+               "%10lu %10lu %6.1f%%  (total)\n",
+#endif
+               ctot, utot, 100. * (utot - (double)ctot) / utot);
+    }
 
     // gzip -cdf copies junk after gzip stream directly to output
     if (g.form == 0 && ret == -2 && g.force && g.pipeout && g.decode != 2 &&
