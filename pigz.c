@@ -3139,19 +3139,13 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
             (method == 8 && g.in_tot > (len + (len >> 10) + 12)) ||
             (method == 257 && g.in_tot > len + (len >> 1) + 3))
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
-            printf("%10jd %10jd?  unk    %s\n",
-                   (intmax_t)g.in_tot, (intmax_t)len, tag);
+            printf("%10ju %10ju?  unk    %s\n", g.in_tot, len, tag);
         else
-            printf("%10jd %10jd %6.1f%%  %s\n",
-                   (intmax_t)g.in_tot, (intmax_t)len, red, tag);
+            printf("%10ju %10ju %6.1f%%  %s\n", g.in_tot, len, red, tag);
 #else
-            printf(sizeof(off_t) == sizeof(long) ?
-                   "%10ld %10ld?  unk    %s\n" : "%10lld %10lld?  unk    %s\n",
-                   g.in_tot, len, tag);
+            printf("%10lu %10lu?  unk    %s\n", g.in_tot, len, tag);
         else
-            printf(sizeof(off_t) == sizeof(long) ?
-                   "%10ld %10ld %6.1f%%  %s\n" : "%10lld %10lld %6.1f%%  %s\n",
-                   g.in_tot, len, red, tag);
+            printf("%10lu %10lu %6.1f%%  %s\n", g.in_tot, len, red, tag);
 #endif
     }
     if (g.verbosity > 1 && g.hcomm != NULL)
