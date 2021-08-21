@@ -4191,8 +4191,12 @@ local void process(char *path) {
         g.outd = -1;            // now prevent deletion on interrupt
         if (g.ind != 0) {
             copymeta(g.inf, g.outf);
-            if (!g.keep)
-                unlink(g.inf);
+            if (!g.keep) {
+                if (st.st_nlink > 1 && !g.force)
+                    complain("%s has hard links -- not unlinking", g.inf);
+                else
+                    unlink(g.inf);
+            }
         }
         if (g.decode && (g.headis & 2) != 0 && g.stamp)
             touch(g.outf, g.stamp);
