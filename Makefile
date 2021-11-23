@@ -1,83 +1,79 @@
-CC=gcc
-CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual
-LDFLAGS=
-# CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual -g -fsanitize=thread
-# LDFLAGS=-g -fsanitize=thread
-# CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual -g -fsanitize=address
-# LDFLAGS=-g -fsanitize=address
-LIBS=-lm -lpthread -lz
-ZOPFLI=zopfli/src/zopfli/
-ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o symbols.o
+#
+# Makefile for pigz
+# Copyright (C) xxxx-2021 Mark Adler
+#
+# This Makefile is free software: you have unlimited permission
+# to copy, distribute, and modify it.
+#
+pkgname = pigz
+pkgversion = 2.6
+progname = pigz
+VPATH = .
+prefix = /usr/local
 
-# use gcc and gmake on Solaris
+# dev
+CC = gcc
+CFLAGS = -O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual
+LFLAGS =
+INCLUDES =
+LIBS = -lm -lpthread -lz
+ZOPFLI = ./zopfli/src/zopfli
 
-pigz: pigz.o yarn.o try.o $(ZOP)
-	$(CC) $(LDFLAGS) -o pigz pigz.o yarn.o try.o $(ZOP) $(LIBS)
-	ln -f pigz unpigz
 
-pigz.o: pigz.c yarn.h try.h $(ZOPFLI)deflate.h $(ZOPFLI)util.h
+# sources
+SRCS  = pigz.c try.c yarn.c
+SRCS += $(ZOPFLI)/lz77.c $(ZOPFLI)/util.c $(ZOPFLI)/symbols.c $(ZOPFLI)/cache.c \
+        $(ZOPFLI)/tree.c $(ZOPFLI)/blocksplitter.c $(ZOPFLI)/deflate.c \
+        $(ZOPFLI)/squeeze.c $(ZOPFLI)/hash.c $(ZOPFLI)/katajainen.c
+# objects
+OBJS := $(SRCS:.c=.o)
 
-yarn.o: yarn.c yarn.h
+# target
+$(progname) : $(OBJS)
+	$(CC) $(LFLAGS) -o $@ $(OBJS) $(LIBS)
 
-try.o: try.c try.h
+# rules
+%.o : %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
 
-deflate.o: $(ZOPFLI)deflate.c $(ZOPFLI)deflate.h $(ZOPFLI)blocksplitter.h $(ZOPFLI)lz77.h $(ZOPFLI)squeeze.h $(ZOPFLI)tree.h $(ZOPFLI)zopfli.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)util.h $(ZOPFLI)symbols.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)deflate.c
+#$(OBJS) : $(progname).d
+# pigz.o: pigz.c yarn.h try.h $(ZOPFLI)/*.h
+include $(progname).d
 
-blocksplitter.o: $(ZOPFLI)blocksplitter.c $(ZOPFLI)blocksplitter.h $(ZOPFLI)deflate.h $(ZOPFLI)lz77.h $(ZOPFLI)squeeze.h $(ZOPFLI)tree.h $(ZOPFLI)util.h $(ZOPFLI)zopfli.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)blocksplitter.c
+# paths
+exec_prefix = $(prefix)
+bindir = $(exec_prefix)/bin
+datarootdir = $(prefix)/share
+infodir = $(datarootdir)/info
+mandir = $(datarootdir)/man
 
-tree.o: $(ZOPFLI)tree.c $(ZOPFLI)tree.h $(ZOPFLI)katajainen.h $(ZOPFLI)util.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)tree.c
+# programs
+DISTNAME = $(pkgname)-$(pkgversion)
+INSTALL = install
+INSTALL_PROGRAM = $(INSTALL) -m 755
+INSTALL_DATA = $(INSTALL) -m 644
+INSTALL_DIR = $(INSTALL) -d -m 755
+SHELL = /bin/sh
+CAN_RUN_INSTALLINFO = $(SHELL) -c "install-info --version" > /dev/null 2>&1
 
-lz77.o: $(ZOPFLI)lz77.c $(ZOPFLI)lz77.h $(ZOPFLI)util.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)zopfli.h $(ZOPFLI)symbols.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)lz77.c
 
-cache.o: $(ZOPFLI)cache.c $(ZOPFLI)cache.h $(ZOPFLI)util.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)cache.c
+# targets
+.PHONY : all install install-bin install-man \
+         install-strip install-compress install-strip-compress \
+         install-bin-strip install-man-compress \
+         uninstall uninstall-bin uninstall-man \
+         doc info man check dist clean distclean
 
-hash.o: $(ZOPFLI)hash.c $(ZOPFLI)hash.h $(ZOPFLI)util.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)hash.c
+all : $(progname)
 
-util.o: $(ZOPFLI)util.c $(ZOPFLI)util.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)util.c
 
-squeeze.o: $(ZOPFLI)squeeze.c $(ZOPFLI)squeeze.h $(ZOPFLI)blocksplitter.h $(ZOPFLI)deflate.h $(ZOPFLI)tree.h $(ZOPFLI)util.h $(ZOPFLI)zopfli.h $(ZOPFLI)lz77.h $(ZOPFLI)cache.h $(ZOPFLI)hash.h $(ZOPFLI)symbols.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)squeeze.c
-
-katajainen.o: $(ZOPFLI)katajainen.c $(ZOPFLI)katajainen.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)katajainen.c
-
-symbols.o: $(ZOPFLI)symbols.c $(ZOPFLI)symbols.h
-	$(CC) $(CFLAGS) -c $(ZOPFLI)symbols.c
-
-dev: pigz pigzj pigzt pigzn
-
-pigzj: pigzj.o yarn.o try.o
-	$(CC) $(LDFLAGS) -o pigzj pigzj.o yarn.o try.o $(LIBS)
-
-pigzj.o: pigz.c yarn.h try.h
-	$(CC) $(CFLAGS) -DNOZOPFLI -c -o pigzj.o pigz.c
-
-pigzt: pigzt.o yarnt.o try.o $(ZOP)
-	$(CC) $(LDFLAGS) -o pigzt pigzt.o yarnt.o try.o $(ZOP) $(LIBS)
-
-pigzt.o: pigz.c yarn.h try.h
-	$(CC) $(CFLAGS) -DPIGZ_DEBUG -g -c -o pigzt.o pigz.c
-
-yarnt.o: yarn.c yarn.h
-	$(CC) $(CFLAGS) -DPIGZ_DEBUG -g -c -o yarnt.o yarn.c
-
-pigzn: pigzn.o tryn.o $(ZOP)
-	$(CC) $(LDFLAGS) -o pigzn pigzn.o tryn.o $(ZOP) $(LIBS)
-
-pigzn.o: pigz.c try.h
-	$(CC) $(CFLAGS) -DPIGZ_DEBUG -DNOTHREAD -g -c -o pigzn.o pigz.c
-
-tryn.o: try.c try.h
-	$(CC) $(CFLAGS) -DPIGZ_DEBUG -DNOTHREAD -g -c -o tryn.o try.c
+depend : $(progname).d
+$(progname).d : $(SRCS)
+	@rm -f ./$@
+	$(CC) -MM $^  >  ./$@
 
 test: pigz
+	@ln -fs pigz unpigz
 	./pigz -kf pigz.c ; ./pigz -t pigz.c.gz
 	./pigz -kfb 32 pigz.c ; ./pigz -t pigz.c.gz
 	./pigz -kfp 1 pigz.c ; ./pigz -t pigz.c.gz
@@ -100,12 +96,64 @@ tests: dev test
 	./pigzn -kf pigz.c ; ./pigz -t pigz.c.gz
 	@rm -f pigz.c.gz
 
-docs: pigz.pdf
+doc : man
 
-pigz.pdf: pigz.1
-	groff -mandoc -f H -T ps pigz.1 | ps2pdf - pigz.pdf
+man : $(VPATH)/doc/$(progname).1
 
-all: pigz pigzj pigzt pigzn docs
+$(VPATH)/doc/$(progname).1 : $(progname)
+	help2man -n 'reduces the size of files' -o $@ ./$(progname)
 
-clean:
-	@rm -f *.o pigz unpigz pigzj pigzn pigzt pigz.c.gz pigz.c.zz pigz.c.zip
+#Makefile : $(VPATH)/configure $(VPATH)/Makefile.in
+#	./config.status
+
+install : install-bin install-man
+install-strip : install-bin-strip install-man
+install-compress : install-bin install-man-compress
+install-strip-compress : install-bin-strip install-man-compress
+
+install-bin : all
+	if [ ! -d "$(DESTDIR)$(bindir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(bindir)" ; fi
+	$(INSTALL_PROGRAM) ./$(progname) "$(DESTDIR)$(bindir)/$(progname)"
+	@ln -snf "$(DESTDIR)$(bindir)/$(progname)" "$(DESTDIR)$(bindir)/un$(progname)"
+
+install-bin-strip : all
+	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install-bin
+
+install-man :
+	if [ ! -d "$(DESTDIR)$(mandir)/man1" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(mandir)/man1" ; fi
+	-rm -f "$(DESTDIR)$(mandir)/man1/$(progname).1"*
+	$(INSTALL_DATA) $(VPATH)/doc/$(progname).1 "$(DESTDIR)$(mandir)/man1/$(progname).1"
+
+install-man-compress : install-man
+	pigz -v -11 "$(DESTDIR)$(mandir)/man1/$(progname).1"
+
+uninstall : uninstall-man uninstall-bin
+
+uninstall-bin :
+	-rm -f "$(DESTDIR)$(bindir)/$(progname)"
+
+uninstall-man :
+	-rm -f "$(DESTDIR)$(mandir)/man1/$(progname).1"*
+
+dist : doc
+	ln -sf $(VPATH) $(DISTNAME)
+	tar -Hustar --owner=root --group=root -cvf $(DISTNAME).tar \
+	  $(DISTNAME)/AUTHORS \
+	  $(DISTNAME)/LICENSE \
+	  $(DISTNAME)/ChangeLog \
+	  $(DISTNAME)/INSTALL \
+	  $(DISTNAME)/Makefile.in \
+	  $(DISTNAME)/NEWS \
+	  $(DISTNAME)/README \
+	  $(DISTNAME)/configure \
+	  $(DISTNAME)/doc/$(progname).1 \
+	  $(DISTNAME)/*.h \
+	  $(DISTNAME)/*.c \
+	rm -f $(DISTNAME)
+	pigz -9 $(DISTNAME).tar
+
+clean :
+	-rm -f $(progname) $(OBJS)
+
+distclean : clean
+	-rm -f Makefile config.status *.tar *.tar.gz

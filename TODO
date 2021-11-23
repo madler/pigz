@@ -1,0 +1,3 @@
+To-do:
+    - make source portable for Windows, VMS, etc. (see gzip source code)
+    - make build portable (currently good for Unixish)
