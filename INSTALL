@@ -1,0 +1,47 @@
+Requirements
+------------
+You will need a C++ compiler.
+GCC is more than sufficient to compile it but the code should compile with any
+standards compliant compiler.
+GCC is available at http://gcc.gnu.org/.
+
+You will also need gnu Make.
+GCC is available at https://gnu.org/software/make/.
+
+Procedure
+---------
+1. Unpack the archive if you have not done so already:
+
+	tar -xf pigz-[version].tar.gz
+or
+	gzip -dc pigz-[version].tar.gz | tar -xf -
+
+This creates the directory ./pigz-[version] containing the source from
+the main archive.
+
+2. Change to lzip directory.
+
+	cd pigz-[version]
+
+3. Run make.
+
+	make
+
+4. Optionally, type 'make test' to run the tests that come with pigz.
+
+5. Type 'make install' to install the program and any data files and
+   documentation.
+
+   Or type 'make install-compress', which additionally compresses the
+   info manual and the man page after installation. (Installing
+   compressed docs may become the default in the future).
+
+   You can install only the program, the info manual or the man page by
+   typing 'make install-bin', 'make install-info' or 'make install-man'
+   respectively.
+
+
+Copyright (C) 2008-2018 Antonio Diaz Diaz.
+
+This file is free documentation: you have unlimited permission to copy,
+distribute and modify it.
