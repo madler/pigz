@@ -584,19 +584,31 @@ local struct {
 #endif
 } g;
 
-// Display a complaint with the program name on stderr.
-local int complain(char *fmt, ...) {
-    va_list ap;
-
+local void message(char *fmt, va_list ap) {
     if (g.verbosity > 0) {
         fprintf(stderr, "%s: ", g.prog);
-        va_start(ap, fmt);
         vfprintf(stderr, fmt, ap);
-        va_end(ap);
         putc('\n', stderr);
         fflush(stderr);
     }
+}
+
+// Display a complaint with the program name on stderr.
+local int complain(char *fmt, ...) {
     g.ret = 1;
+    va_list ap;
+    va_start(ap, fmt);
+    message(fmt, ap);
+    va_end(ap);
+    return 0;
+}
+
+// Same as complain(), but don't force a bad return code.
+local int grumble(char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    message(fmt, ap);
+    va_end(ap);
     return 0;
 }
 
@@ -3995,7 +4007,7 @@ local void process(char *path) {
         // don't compress .gz (or provided suffix) files, unless -f
         if (!(g.force || g.list || g.decode) && len >= strlen(g.sufx) &&
                 strcmp(g.inf + len - strlen(g.sufx), g.sufx) == 0) {
-            complain("skipping: %s ends with %s", g.inf, g.sufx);
+            grumble("skipping: %s ends with %s", g.inf, g.sufx);
             return;
         }
 
