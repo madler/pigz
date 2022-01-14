@@ -4021,6 +4021,13 @@ local void process(char *path) {
     }
     SET_BINARY_MODE(g.ind);
 
+    // if requested, just list information about the input file
+    if (g.list && g.decode != 2) {
+        list_info();
+        load_end();
+        return;
+    }
+
     // if decoding or testing, try to read gzip header
     if (g.decode) {
         in_init();
@@ -4060,13 +4067,6 @@ local void process(char *path) {
             load_end();
             return;
         }
-    }
-
-    // if requested, just list information about input file
-    if (g.list) {
-        list_info();
-        load_end();
-        return;
     }
 
     // create output file out, descriptor outd
