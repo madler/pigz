@@ -4462,8 +4462,10 @@ local int option(char *arg) {
             case 'C':  get = 7;  break;
 #ifndef NOZOPFLI
             case 'F':  g.zopts.blocksplittinglast = 1;  break;
-            case 'I':  get = 4;  break;
+#endif
             case 'H':  g.strategy = Z_HUFFMAN_ONLY;  break;
+#ifndef NOZOPFLI
+            case 'I':  get = 4;  break;
             case 'J':  get = 5;  break;
 #endif
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
