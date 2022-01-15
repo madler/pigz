@@ -1,6 +1,6 @@
 /* pigz.c -- parallel implementation of gzip
- * Copyright (C) 2007-2021 Mark Adler
- * Version 2.6  6 Feb 2021  Mark Adler
+ * Copyright (C) 2007-2022 Mark Adler
+ * Version 2.7  15 Jan 2022  Mark Adler
  */
 
 /*
@@ -198,9 +198,16 @@
    2.6     6 Feb 2021  Add --huffman/-H and --rle/U strategy options
                        Fix issue when compiling for no threads
                        Fail silently on a broken pipe
+   2.7    15 Jan 2022  Show time stamp only for the first gzip member
+                       Show totals when listing more than one gzip member
+                       Don't unlink input file if it has other links
+                       Add documentation for environment variables
+                       Fix bug when combining -l with -d
+                       Exit with status of zero if skipping non .gz files
+                       Permit Huffman only (-H) when not compiling with zopfli
  */
 
-#define VERSION "pigz 2.6"
+#define VERSION "pigz 2.7"
 
 /* To-do:
     - make source portable for Windows, VMS, etc. (see gzip source code)
@@ -4471,7 +4478,7 @@ local int option(char *arg) {
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 puts(VERSION);
-                puts("Copyright (C) 2007-2021 Mark Adler");
+                puts("Copyright (C) 2007-2022 Mark Adler");
                 puts("Subject to the terms of the zlib license.");
                 puts("No warranty is provided or implied.");
                 exit(0);
