@@ -3922,8 +3922,7 @@ local void process(char *path) {
         vstrcpy(&g.inf, &g.inz, 0, "<stdin>");
         g.ind = 0;
         g.name = NULL;
-        g.mtime = g.headis & 2 ?
-                  (fstat(g.ind, &st) ? time(NULL) : st.st_mtime) : 0;
+        g.mtime = 0;
         len = 0;
     }
     else {
