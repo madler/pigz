@@ -3485,6 +3485,9 @@ local void infchk(void) {
         strm.next_in = Z_NULL;
         ret = inflateBack(&strm, inb, NULL, outb, NULL);
         inflateBackEnd(&strm);
+        g.in_left += strm.avail_in;
+        g.in_next = strm.next_in;
+        outb(NULL, NULL, 0);        // finish off final write and check
         if (ret == Z_DATA_ERROR)
             throw(EDOM, "%s: corrupted -- invalid deflate data (%s)",
                   g.inf, strm.msg);
@@ -3492,9 +3495,6 @@ local void infchk(void) {
             throw(EDOM, "%s: corrupted -- incomplete deflate data", g.inf);
         if (ret != Z_STREAM_END)
             throw(EINVAL, "internal error");
-        g.in_left += strm.avail_in;
-        g.in_next = strm.next_in;
-        outb(NULL, NULL, 0);        // finish off final write and check
 
         // compute compressed data length
         clen = g.in_tot - g.in_left;
