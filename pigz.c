@@ -3124,8 +3124,12 @@ local void show_info(int method, unsigned long check, length_t len, int cont) {
     if (g.stamp && !cont) {
         strcpy(mod, ctime(&g.stamp));
         now = time(NULL);
-        if (strcmp(mod + 20, ctime(&now) + 20) != 0)
-            strcpy(mod + 11, mod + 19);
+        if (strcmp(mod + 20, ctime(&now) + 20) != 0) {
+            // use memmove() for overlapping blocks rather than strcpy()
+            char *dst = mod + 11;
+            char const *src = mod + 19;
+            memmove(dst, src, strlen(src) + 1);
+        }
     }
     else
         strcpy(mod + 4, "------ -----");
