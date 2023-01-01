@@ -3414,8 +3414,10 @@ local int outb(void *desc, unsigned char *buf, unsigned len) {
 
         // copy the output and alert the worker bees
         out_len = len;
-        g.out_tot += len;
-        memcpy(out_copy, buf, len);
+        if (len) {
+            g.out_tot += len;
+            memcpy(out_copy, buf, len);
+        }
         twist(outb_write_more, TO, 1);
         twist(outb_check_more, TO, 1);
 
