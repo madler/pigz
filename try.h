@@ -357,8 +357,8 @@ struct try_s_ {
 #   define try_stack_ ((try_t_ *)pthread_getspecific(try_key_))
 #   define try_stack_set_(next) \
         do { \
-            assert(pthread_setspecific(try_key_, next) == 0 && \
-                   "try: pthread_setspecific() failed"); \
+            int try_ret_ = pthread_setspecific(try_key_, next); \
+            assert(try_ret_ == 0 && "try: pthread_setspecific() failed"); \
         } while (0)
 #else /* !PTHREAD_ONCE_INIT */
     extern try_t_ *try_stack_;
