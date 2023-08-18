@@ -1333,7 +1333,7 @@ local long zlib_vernum(void) {
         }
         ver++;
     } while (left);
-    return left < 2 ? num << (left << 2) : -1;
+    return left < 3 ? num << (left << 2) : -1;
 }
 
 // -- check value combination routines for parallel calculation --
