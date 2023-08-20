@@ -347,6 +347,9 @@
 #define _FILE_OFFSET_BITS 64            // Use large file functions
 #define _LARGE_FILES                    // Same thing for AIX
 #define _XOPEN_SOURCE 700               // For POSIX 2008
+#ifdef __OpenBSD__
+#define _BSD_SOURCE                     // for pledge(2)
+#endif
 
 // Included headers and what is expected from each.
 #include <stdio.h>      // fflush(), fprintf(), fputs(), getchar(), putc(),
