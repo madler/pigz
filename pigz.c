@@ -4607,6 +4607,13 @@ int main(int argc, char **argv) {
     char *opts, *p;                 // environment default options, marker
     ball_t err;                     // error information from throw()
 
+#ifdef __OpenBSD__
+    if (pledge("stdio rpath wpath cpath fattr chown", NULL) == -1) {
+        complain("pledge");
+        exit(1);
+    }
+#endif
+
     g.ret = 0;
     try {
         // initialize globals
@@ -4713,6 +4720,14 @@ int main(int argc, char **argv) {
             else if (option(argv[n]))   // process argument
                 argv[n] = NULL;         // remove if option
         option(NULL);                   // check for missing parameter
+
+#ifdef __OpenBSD__
+        if (g.pipeout || g.decode == 2 || g.list)
+            if (pledge("stdio rpath", NULL) == -1) {
+                complain("pledge");
+                exit(1);
+            }
+#endif
 
         // process command-line filenames
         done = 0;
