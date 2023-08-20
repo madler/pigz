@@ -1,4 +1,4 @@
-.TH PIGZ 1 "January 15, 2022"
+.TH PIGZ 1 "August 19, 2023"
 .SH NAME
 pigz, unpigz \- compress or expand files
 .SH SYNOPSIS
@@ -178,7 +178,7 @@ important.
 .B -M --time
 Store or restore the modification time. -nM will store or restore the
 modification time, but not the name. Note that the order of the options is
-important.
+important. Modification times are stored only for regular files, not pipes.
 .TP
 .B -n --no-name
 Do not store or restore the file name or the modification time. This is the
@@ -242,4 +242,4 @@ This software is provided 'as-is', without any express or implied
 warranty.  In no event will the author be held liable for any damages
 arising from the use of this software.
 .PP
-Copyright (C) 2007-2022 Mark Adler <madler@alumni.caltech.edu>
+Copyright (C) 2007-2023 Mark Adler <madler@alumni.caltech.edu>
