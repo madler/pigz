@@ -1,4 +1,4 @@
-pigz 2.8 (19 Aug 2022) by Mark Adler
+pigz 2.8 (19 Aug 2023) by Mark Adler
 
 pigz, which stands for Parallel Implementation of GZip, is a fully functional
 replacement for gzip that exploits multiple processors and multiple cores to
