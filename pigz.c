@@ -4243,6 +4243,7 @@ local char *helptext[] = {
 "  -0 to -9, -11        Compression level (level 11, zopfli, is much slower)",
 #endif
 "  --fast, --best       Compression levels 1 and 9 respectively",
+"                       Level -0 is no compression. The default is -6",
 "  -A, --alias xxx      Use xxx as the name for any --zip entry from stdin",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
 "  -c, --stdout         Write all processed output to stdout (won't delete)",
@@ -4256,8 +4257,8 @@ local char *helptext[] = {
 "  -H, --huffman        Use only Huffman coding for compression",
 "  -i, --independent    Compress blocks independently for damage recovery",
 #ifndef NOZOPFLI
-"  -I, --iterations n   Number of iterations for -11 optimization",
-"  -J, --maxsplits n    Maximum number of split blocks for -11",
+"  -I, --iterations n   Number of iterations for -11 optimization (default 15)",
+"  -J, --maxsplits n    Maximum number of split blocks for -11 (default 15)",
 #endif
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
