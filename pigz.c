@@ -1153,7 +1153,7 @@ local length_t put_header(void) {
             complain("can't store comment in zlib format -- ignoring");
         unsigned head;
         head = (0x78 << 8) +        // deflate, 32K window
-               (g.level >= 9 ? 3 << 6 :
+               (g.level >= 7 ? 3 << 6 :
                 g.level == 0 || g.level == 1 ? 0 << 6:
                 g.level >= 6 || g.level == Z_DEFAULT_COMPRESSION ? 2 << 6 :
                 1 << 6);            // optional compression level clue
