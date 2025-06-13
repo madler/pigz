@@ -4536,7 +4536,7 @@ local int option(char *arg) {
             case 'h':  help();  break;
             case 'i':  g.setdict = 0;  break;
             case 'k':  g.keep = 1;  break;
-            case 'l':  g.list = 1;  break;
+            case 'l':  g.list = 1;  g.decode = 2;  break;
             case 'n':  g.headis = 0;  break;
             case 'T':
             case 'm':  g.headis &= ~0xa;  break;
