@@ -4736,7 +4736,7 @@ int main(int argc, char **argv) {
         option(NULL);                   // check for missing parameter
         if (g.pipeout && g.output != NULL)
             throw(EINVAL, "-o (--output) conflicts with -c (--stdout)");
-        if (g.verbosity > 1)
+        if (g.verbosity > 1 && !g.decode)
             fprintf(stderr, "%d compression threads\n", g.procs);
 
         // process command-line filenames
