@@ -3998,8 +3998,11 @@ local void process(char *path) {
             // accumulate list of entries (need to do this, since readdir()
             // behavior not defined if directory modified between calls)
             here = opendir(g.inf);
-            if (here == NULL)
+            if (here == NULL) {
+                grumble("skipping: %s/ cannot be opened (%s)",
+                        g.inf, strerror(errno));
                 return;
+            }
             while ((next = readdir(here)) != NULL) {
                 if (next->d_name[0] == 0 ||
                     (next->d_name[0] == '.' && (next->d_name[1] == 0 ||
@@ -4044,8 +4047,11 @@ local void process(char *path) {
 
         // open input file
         g.ind = open(g.inf, O_RDONLY, 0);
-        if (g.ind < 0)
-            throw(errno, "read error on %s (%s)", g.inf, strerror(errno));
+        if (g.ind < 0) {
+            complain("skipping: %s cannot be opened (%s)",
+                     g.inf, strerror(errno));
+            return;
+        }
 
         // prepare gzip header information for compression
         g.name = g.headis & 1 ? justname(g.inf) : NULL;
