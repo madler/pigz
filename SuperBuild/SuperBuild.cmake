@@ -12,6 +12,21 @@ else()
     set(git_protocol "https")
 endif()
 
+# Build a list of CMake arguments to pass to ExternalProject_Add() calls.
+set(EXTERNAL_CMAKE_ARGS
+  -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+  -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+  -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+  -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
+  -DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}
+  -DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}
+)
+
+# If top-level CMake enabled IPO/LTO, forward that too.
+if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+  list(APPEND EXTERNAL_CMAKE_ARGS -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON)
+endif()
+
 # Basic CMake build settings
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING

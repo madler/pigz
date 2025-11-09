@@ -2,6 +2,34 @@ cmake_minimum_required(VERSION 3.5)
 
 project(pigz)
 
+# Optional: tune build for native CPU and enable LTO
+option(TUNE_NATIVE "Tune compile flags for the native CPU (may reduce portability)" OFF)
+option(ENABLE_LTO "Enable link-time optimization (LTO) where supported" OFF)
+
+# Default optimization level when tuning or enabling LTO
+set(DEFAULT_OPTIM_FLAGS "-O3")
+
+# Helper: append flags to C and CXX flags
+function(append_cflags flags)
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${flags}" PARENT_SCOPE)
+endfunction()
+function(append_cxxflags flags)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${flags}" PARENT_SCOPE)
+endfunction()
+
+# Apply -O3 if not already set to a stronger optimization
+if(NOT CMAKE_BUILD_TYPE)
+  # user didn't set a build type; don't override — but document recommended usage.
+  message(STATUS "No CMAKE_BUILD_TYPE set; recommended: -DCMAKE_BUILD_TYPE=Release or RelWithDebInfo")
+endif()
+
+if(TUNE_NATIVE)
+  message(STATUS "TUNE_NATIVE=ON: adding -O3 -march=native -mtune=native")
+  # Add to both C and C++ flags
+  append_cflags("${DEFAULT_OPTIM_FLAGS} -march=native -mtune=native")
+  append_cxxflags("${DEFAULT_OPTIM_FLAGS} -march=native -mtune=native")
+endif()
+
 # Option Choose whether to use static runtime
 include(ucm.cmake)
 option(USE_STATIC_RUNTIME "Use static runtime" ON)

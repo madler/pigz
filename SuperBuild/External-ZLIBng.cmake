@@ -6,7 +6,8 @@ ExternalProject_Add(zlib
     SOURCE_DIR ng-zlib
     BINARY_DIR ng-zlib-build
     BUILD_BYPRODUCTS ${ZLIB_STATIC_LIBRARIES}
-	CMAKE_ARGS
+    CMAKE_ARGS
+        ${EXTERNAL_CMAKE_ARGS}
         -Wno-dev
         -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
         -DCMAKE_INSTALL_PREFIX:PATH=${DEP_INSTALL_DIR}
