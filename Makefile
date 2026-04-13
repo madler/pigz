@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual
+CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual -D__EXTENSIONS__
 LDFLAGS=
 # CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual -g -fsanitize=thread
 # LDFLAGS=-g -fsanitize=thread

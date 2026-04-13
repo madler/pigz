@@ -346,7 +346,9 @@
 // Portability defines.
 #define _FILE_OFFSET_BITS 64            // Use large file functions
 #define _LARGE_FILES                    // Same thing for AIX
-#define _XOPEN_SOURCE 700               // For POSIX 2008
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600               // Require to build with gcc on Solaris
+#endif
 
 // Included headers and what is expected from each.
 #include <stdio.h>      // fflush(), fprintf(), fputs(), getchar(), putc(),
