@@ -26,7 +26,9 @@
  */
 
 // For thread portability.
-#define _XOPEN_SOURCE 700
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600
+#endif
 #define _POSIX_C_SOURCE 200809L
 #define _THREAD_SAFE
 
