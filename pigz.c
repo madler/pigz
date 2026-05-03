@@ -441,7 +441,7 @@
 #endif
 
 #ifndef NOZOPFLI
-#  include "zopfli/src/zopfli/deflate.h"    // ZopfliDeflatePart(),
+#  include "zopfli/deflate.h"    // ZopfliDeflatePart(),
                                             // ZopfliInitOptions(),
                                             // ZopfliOptions
 #endif
