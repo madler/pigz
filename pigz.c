@@ -4317,15 +4317,15 @@ local char *helptext[] = {
 };
 
 // Display the help text above.
-local void help(void) {
+local void help(FILE* stdtgt, int rc) {
     int n;
 
     if (g.verbosity == 0)
         return;
     for (n = 0; n < (int)(sizeof(helptext) / sizeof(char *)); n++)
-        fprintf(stderr, "%s\n", helptext[n]);
-    fflush(stderr);
-    exit(0);
+        fprintf(stdtgt, "%s\n", helptext[n]);
+    fflush(stdtgt);
+    exit(rc);
 }
 
 #ifndef NOTHREAD
@@ -4539,7 +4539,7 @@ local int option(char *arg) {
             case 'c':  g.pipeout = 1;  break;
             case 'd':  if (!g.decode) g.headis >>= 2;  g.decode = 1;  break;
             case 'f':  g.force = 1;  break;
-            case 'h':  help();  break;
+            case 'h':  help(stdout, EXIT_SUCCESS);  break;
             case 'i':  g.setdict = 0;  break;
             case 'k':  g.keep = 1;  break;
             case 'l':  g.list = 1;  g.decode = 2;  break;
@@ -4727,7 +4727,7 @@ int main(int argc, char **argv) {
 
         // if no arguments and compressed data to/from terminal, show help
         if (argc < 2 && isatty(g.decode ? 0 : 1))
-            help();
+            help(stderr, EXIT_FAILURE);
 
         // process all command-line options first
         nop = argc;
