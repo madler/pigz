@@ -4524,7 +4524,9 @@ local int option(char *arg) {
                 puts(VERSION);
                 if (g.verbosity > 1) {
                     printf("zlib %s\n", zlibVersion());
-                    puts("zopfli 1.0.1");
+#ifndef NOZOPFLI
+                    puts("zopfli 1.0.3");
+#endif
                 }
                 exit(0);
                 break;          // avoid warning

@@ -431,26 +431,25 @@ Changes the population counts in a way that the consequent Huffman tree
 compression, especially its rle-part, will be more likely to compress this data
 more efficiently. length contains the size of the histogram.
 */
-void OptimizeHuffmanForRle(unsigned length, size_t* counts) {
-  unsigned i;
-  int k, stride;
+void OptimizeHuffmanForRle(int length, size_t* counts) {
+  int i, k, stride;
   size_t symbol, sum, limit;
   int* good_for_rle;
 
   /* 1) We don't want to touch the trailing zeros. We may break the
   rules of the format by adding more data in the distance codes. */
-  for (; length > 0; --length) {
+  for (; length >= 0; --length) {
+    if (length == 0) {
+      return;
+    }
     if (counts[length - 1] != 0) {
       /* Now counts[0..length - 1] does not have trailing zeros. */
       break;
     }
   }
-  if (length == 0) {
-    return;
-  }
   /* 2) Let's mark all population counts that already can be encoded
   with an rle code.*/
-  good_for_rle = (int*)malloc(length * sizeof(int));
+  good_for_rle = (int*)malloc((unsigned)length * sizeof(int));
   for (i = 0; i < length; ++i) good_for_rle[i] = 0;
 
   /* Let's not spoil any of the existing good rle codes.
