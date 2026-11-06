@@ -4522,8 +4522,10 @@ local int option(char *arg) {
                 // -T defined below as an alternative for -m
             case 'V':
                 puts(VERSION);
-                if (g.verbosity > 1)
+                if (g.verbosity > 1) {
                     printf("zlib %s\n", zlibVersion());
+                    puts("zopfli 1.0.1");
+                }
                 exit(0);
                 break;          // avoid warning
             case 'Y':  g.sync = 1;  break;
