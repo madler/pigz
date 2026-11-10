@@ -6,8 +6,22 @@ LDFLAGS?=
 # CFLAGS=-O3 -Wall -Wextra -Wno-unknown-pragmas -Wcast-qual -g -fsanitize=address
 # LDFLAGS=-g -fsanitize=address
 LIBS?=-lm -lpthread -lz
-ZOPFLI=zopfli/src/zopfli/
-ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o symbols.o
+
+# Optional: use system-installed zopfli
+# Usage: make ZOPFLI_PREFIX=/usr
+ifneq ($(ZOPFLI_PREFIX),)
+    ZOP=
+    LIBS+= -lzopfli
+    CFLAGS+= -I$(ZOPFLI_PREFIX)/include
+    LDFLAGS+= -L$(ZOPFLI_PREFIX)/lib
+		# to satisfy Makefile dependencies in any case
+    ZOPFLI=$(ZOPFLI_PREFIX)/include/zopfli/
+else
+    # Use bundled sources
+    ZOPFLI=zopfli/src/zopfli/
+    CFLAGS+= -Izopfli/src
+    ZOP=deflate.o blocksplitter.o tree.o lz77.o cache.o hash.o util.o squeeze.o katajainen.o symbols.o
+endif
 
 # use gcc and gmake on Solaris
 

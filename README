@@ -22,6 +22,10 @@ recommended, which reduces the overhead between blocks.  You can find the
 latest version of zlib at http://zlib.net/ .  You can look in pigz.c for the
 change history.
 
+A preinstalled version of the Zopfli library can be used, this is achievable
+with a make option like ZOPFLI_PREFIX=/usr/local . The build directorry should
+be cleaned ("make clean") when this option is added or removed.
+
 Questions, comments, bug reports, fixes, etc. can be emailed to Mark at his
 address in the license below.
 
